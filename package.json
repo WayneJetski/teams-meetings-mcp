@@ -1,0 +1,28 @@
+{
+  "name": "teams-meeting-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Microsoft Teams meeting insights, transcripts, and action items",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^2.16.0",
+    "@elastic/elasticsearch": "^8.16.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.1",
+    "express-session": "^1.19.0",
+    "node-cron": "^3.0.3",
+    "zod": "^3.24.0"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "mcp-remote": "^0.1.38"
+  }
+}

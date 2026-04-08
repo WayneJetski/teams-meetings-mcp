@@ -1,0 +1,63 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: meetings-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx1g
+    ports:
+      - "9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    networks:
+      - knowledge-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meetings-mcp
+    ports:
+      - "4005:4005"
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - PORT=4005
+      - MCP_PATH=/mcp
+      - NODE_ENV=production
+      - APP_BASE_URL=${APP_BASE_URL:-http://localhost:4005}
+      # Microsoft Graph API
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET}
+      - GRAPH_DATA_TIER=${GRAPH_DATA_TIER:-transcripts}
+      # Session
+      - SESSION_SECRET=${SESSION_SECRET}
+      # Sync schedule (cron expression)
+      - SYNC_CRON=${SYNC_CRON:-0 * * * *}
+      - SYNC_LOOKBACK_DAYS=${SYNC_LOOKBACK_DAYS:-30}
+    volumes:
+      - token-cache:/app/.token-cache
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - knowledge-net
+    restart: unless-stopped
+
+volumes:
+  es-data:
+    driver: local
+  token-cache:
+    driver: local
+
+networks:
+  knowledge-net:
+    driver: bridge

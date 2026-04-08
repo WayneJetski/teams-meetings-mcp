@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Teams Meeting Insights</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #232733;
+      --border: #2e3340;
+      --text: #e4e6eb;
+      --text2: #8b8fa3;
+      --accent: #5b6ef5;
+      --accent2: #7c8aff;
+      --green: #34d399;
+      --yellow: #fbbf24;
+      --red: #f87171;
+      --orange: #fb923c;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    header h1 .icon { font-size: 22px; }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .status-dot.healthy { background: var(--green); }
+    .status-dot.unhealthy { background: var(--red); }
+    .status-dot.unknown { background: var(--text2); }
+
+    .status-label {
+      font-size: 13px;
+      color: var(--text2);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    button:hover { background: var(--accent2); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    button.secondary {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+    }
+
+    button.secondary:hover { background: var(--border); }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+    }
+
+    .tab {
+      padding: 10px 20px;
+      font-size: 14px;
+      color: var(--text2);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+      background: none;
+      border-radius: 0;
+    }
+
+    .tab:hover { color: var(--text); background: none; }
+    .tab.active { color: var(--accent2); border-bottom-color: var(--accent); background: none; }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Stats cards */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+    }
+
+    .stat-card .label {
+      font-size: 12px;
+      color: var(--text2);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+
+    .stat-card .value {
+      font-size: 28px;
+      font-weight: 700;
+    }
+
+    .stat-card .sub {
+      font-size: 12px;
+      color: var(--text2);
+      margin-top: 4px;
+    }
+
+    /* Search */
+    .search-bar {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .search-bar input {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .search-bar input:focus { border-color: var(--accent); }
+    .search-bar input::placeholder { color: var(--text2); }
+
+    /* Meeting list */
+    .meeting-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .meeting-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px 20px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+
+    .meeting-card:hover { border-color: var(--accent); }
+
+    .meeting-card .meeting-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }
+
+    .meeting-card .title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .meeting-card .date {
+      font-size: 12px;
+      color: var(--text2);
+      white-space: nowrap;
+      margin-left: 12px;
+    }
+
+    .meeting-card .meta {
+      font-size: 13px;
+      color: var(--text2);
+      margin-bottom: 8px;
+    }
+
+    .meeting-card .summary {
+      font-size: 13px;
+      color: var(--text2);
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .badge.insights { background: rgba(91,110,245,0.15); color: var(--accent2); }
+    .badge.transcript { background: rgba(52,211,153,0.15); color: var(--green); }
+    .badge.both { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .badge.manual { background: rgba(139,143,163,0.15); color: var(--text2); }
+
+    .badge.topic {
+      background: var(--surface2);
+      color: var(--text2);
+      margin-right: 4px;
+      margin-top: 6px;
+    }
+
+    /* Meeting detail modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-overlay.active { display: flex; }
+
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 90%;
+      max-width: 800px;
+      max-height: 85vh;
+      overflow-y: auto;
+      padding: 28px;
+    }
+
+    .modal h2 {
+      font-size: 20px;
+      margin-bottom: 4px;
+    }
+
+    .modal .modal-meta {
+      font-size: 13px;
+      color: var(--text2);
+      margin-bottom: 20px;
+    }
+
+    .modal .close-btn {
+      float: right;
+      background: none;
+      color: var(--text2);
+      font-size: 20px;
+      padding: 4px 8px;
+    }
+
+    .modal .close-btn:hover { color: var(--text); }
+
+    .modal section {
+      margin-bottom: 20px;
+    }
+
+    .modal section h3 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text2);
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal section p, .modal section li {
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .modal section ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    .modal section ul li {
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal section ul li:last-child { border-bottom: none; }
+
+    .action-owner {
+      font-size: 12px;
+      color: var(--accent2);
+      margin-left: 6px;
+    }
+
+    /* Sync panel */
+    .sync-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .sync-panel h3 {
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+
+    .sync-info {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .sync-info .item .label {
+      font-size: 11px;
+      color: var(--text2);
+      text-transform: uppercase;
+    }
+
+    .sync-info .item .val {
+      font-size: 14px;
+      margin-top: 2px;
+    }
+
+    /* Lists in stats */
+    .ranked-list {
+      list-style: none;
+      padding: 0;
+    }
+
+    .ranked-list li {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+
+    .ranked-list li:last-child { border-bottom: none; }
+    .ranked-list .count { color: var(--text2); }
+
+    .empty-state {
+      text-align: center;
+      color: var(--text2);
+      padding: 60px 20px;
+      font-size: 14px;
+    }
+
+    .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+
+    .loading {
+      text-align: center;
+      color: var(--text2);
+      padding: 40px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+
+    .pagination {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 20px;
+    }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .container { padding: 16px; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+      .search-bar { flex-direction: column; }
+      .modal { width: 95%; padding: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>
+      <span class="icon">&#9783;</span>
+      Teams Meeting Insights
+    </h1>
+    <div class="header-actions">
+      <span class="status-label" id="health-status">
+        <span class="status-dot unknown"></span>
+        Checking...
+      </span>
+      <span class="status-label" id="user-info" style="margin-left:8px;"></span>
+      <button id="sync-btn" onclick="triggerSync()">Sync Now</button>
+      <form method="POST" action="/auth/logout" style="margin:0;">
+        <button type="submit" class="secondary" style="font-size:12px;">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="tabs">
+      <button class="tab active" data-tab="meetings">Meetings</button>
+      <button class="tab" data-tab="search">Search</button>
+      <button class="tab" data-tab="stats">Statistics</button>
+      <button class="tab" data-tab="sync">Sync Status</button>
+    </div>
+
+    <!-- Meetings Tab -->
+    <div class="tab-content active" id="tab-meetings">
+      <div id="meetings-list" class="meeting-list">
+        <div class="loading"><span class="spinner"></span></div>
+      </div>
+      <div class="pagination" id="meetings-pagination"></div>
+    </div>
+
+    <!-- Search Tab -->
+    <div class="tab-content" id="tab-search">
+      <div class="search-bar">
+        <input type="text" id="search-input" placeholder="Search meetings, action items, decisions..." />
+        <input type="text" id="search-attendee" placeholder="Attendee (optional)" style="max-width: 200px;" />
+        <button onclick="doSearch()">Search</button>
+      </div>
+      <div id="search-results" class="meeting-list">
+        <div class="empty-state">
+          <div class="icon">&#128269;</div>
+          Enter a search query to find meetings.
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats Tab -->
+    <div class="tab-content" id="tab-stats">
+      <div id="stats-content">
+        <div class="loading"><span class="spinner"></span></div>
+      </div>
+    </div>
+
+    <!-- Sync Tab -->
+    <div class="tab-content" id="tab-sync">
+      <div class="sync-panel">
+        <h3>Sync Engine</h3>
+        <div class="sync-info" id="sync-info">
+          <div class="loading"><span class="spinner"></span></div>
+        </div>
+        <button id="manual-sync-btn" onclick="triggerSync()">Trigger Manual Sync</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Meeting Detail Modal -->
+  <div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+      <button class="close-btn" onclick="closeModal()">&times;</button>
+      <div id="modal-content"></div>
+    </div>
+  </div>
+
+  <script>
+    // State
+    let currentPage = 0;
+    const PAGE_SIZE = 20;
+    let isSyncing = false;
+    let syncPollTimer = null;
+
+    // Tabs
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+
+        if (tab.dataset.tab === 'stats') loadStats();
+        if (tab.dataset.tab === 'sync') loadSyncStatus();
+      });
+    });
+
+    // Search on Enter
+    document.getElementById('search-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') doSearch();
+    });
+
+    // Health check
+    async function checkHealth() {
+      const el = document.getElementById('health-status');
+      try {
+        const res = await fetch('/health');
+        const data = await res.json();
+        if (data.status === 'ok') {
+          el.innerHTML = '<span class="status-dot healthy"></span> Connected';
+        } else {
+          el.innerHTML = '<span class="status-dot unhealthy"></span> Unhealthy';
+        }
+      } catch {
+        el.innerHTML = '<span class="status-dot unhealthy"></span> Disconnected';
+      }
+    }
+
+    // Meetings list
+    async function loadMeetings(page = 0) {
+      const el = document.getElementById('meetings-list');
+      el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+
+      try {
+        const res = await fetch(`/api/meetings?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`);
+        const data = await res.json();
+
+        if (!data.meetings || data.meetings.length === 0) {
+          if (isSyncing) {
+            el.innerHTML = '<div class="empty-state"><div class="icon"><span class="spinner"></span></div>Syncing meetings from Microsoft Teams&hellip;</div>';
+          } else {
+            el.innerHTML = '<div class="empty-state"><div class="icon">&#128197;</div>No meetings indexed yet. Run a sync to get started.</div>';
+          }
+          document.getElementById('meetings-pagination').innerHTML = '';
+          return;
+        }
+
+        el.innerHTML = data.meetings.map(m => meetingCard(m)).join('');
+
+        // Pagination
+        const totalPages = Math.ceil(data.total / PAGE_SIZE);
+        const pag = document.getElementById('meetings-pagination');
+        if (totalPages > 1) {
+          let html = '';
+          if (page > 0) html += `<button class="secondary" onclick="loadMeetings(${page - 1})">Prev</button>`;
+          html += `<span style="color:var(--text2);font-size:13px;line-height:36px;">Page ${page + 1} of ${totalPages}</span>`;
+          if (page < totalPages - 1) html += `<button class="secondary" onclick="loadMeetings(${page + 1})">Next</button>`;
+          pag.innerHTML = html;
+        } else {
+          pag.innerHTML = '';
+        }
+      } catch (err) {
+        el.innerHTML = `<div class="empty-state">Failed to load meetings: ${err.message}</div>`;
+      }
+    }
+
+    function meetingCard(m) {
+      const date = m.start_time ? new Date(m.start_time).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Unknown date';
+      const source = m.data_source || 'unknown';
+      const badgeClass = source === 'ai_insights' ? 'insights' : source === 'both' ? 'both' : source === 'manual' ? 'manual' : 'transcript';
+      const attendeeCount = m.attendees ? m.attendees.length : 0;
+      const actionCount = m.action_items ? m.action_items.length : 0;
+      const duration = m.duration_minutes ? `${m.duration_minutes} min` : '';
+      const topics = (m.topics || []).slice(0, 3).map(t => `<span class="badge topic">${esc(t)}</span>`).join('');
+
+      return `<div class="meeting-card" onclick="openMeeting('${esc(m.meeting_id)}')">
+        <div class="meeting-header">
+          <span class="title">${esc(m.title)}</span>
+          <span class="date">${date}</span>
+        </div>
+        <div class="meta">
+          ${duration ? duration + ' &middot; ' : ''}${attendeeCount} attendees${actionCount ? ' &middot; ' + actionCount + ' action items' : ''}
+          &middot; <span class="badge ${badgeClass}">${source}</span>
+        </div>
+        ${m.summary ? `<div class="summary">${esc(m.summary)}</div>` : ''}
+        ${topics ? `<div>${topics}</div>` : ''}
+      </div>`;
+    }
+
+    // Search
+    async function doSearch() {
+      const q = document.getElementById('search-input').value.trim();
+      const attendee = document.getElementById('search-attendee').value.trim();
+      const el = document.getElementById('search-results');
+
+      if (!q && !attendee) return;
+
+      el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+
+      try {
+        const params = new URLSearchParams();
+        if (q) params.set('q', q);
+        if (attendee) params.set('attendee', attendee);
+        params.set('limit', '20');
+
+        const res = await fetch('/api/search?' + params);
+        const data = await res.json();
+
+        if (!data.meetings || data.meetings.length === 0) {
+          el.innerHTML = '<div class="empty-state"><div class="icon">&#128269;</div>No results found.</div>';
+          return;
+        }
+
+        el.innerHTML = data.meetings.map(m => {
+          const highlights = m.highlights || {};
+          const snippet = Object.values(highlights).flat().join(' ... ') || m.summary || '';
+          return meetingCard({ ...m, summary: snippet.replace(/<em>/g, '<b>').replace(/<\/em>/g, '</b>') });
+        }).join('');
+      } catch (err) {
+        el.innerHTML = `<div class="empty-state">Search failed: ${err.message}</div>`;
+      }
+    }
+
+    // Meeting detail
+    async function openMeeting(id) {
+      const modal = document.getElementById('modal');
+      const content = document.getElementById('modal-content');
+      content.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+      modal.classList.add('active');
+
+      try {
+        const res = await fetch(`/api/meetings/${encodeURIComponent(id)}?transcript=true`);
+        const m = await res.json();
+
+        const date = m.start_time ? new Date(m.start_time).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+        const attendees = (m.attendees || []).join(', ') || 'Unknown';
+
+        let html = `<h2>${esc(m.title)}</h2>
+          <div class="modal-meta">${date}${m.duration_minutes ? ' &middot; ' + m.duration_minutes + ' min' : ''} &middot; Organized by ${esc(m.organizer || 'Unknown')}</div>
+          <div class="modal-meta">Attendees: ${esc(attendees)}</div>`;
+
+        if (m.summary) {
+          html += `<section><h3>Summary</h3><p>${esc(m.summary)}</p></section>`;
+        }
+
+        if (m.action_items && m.action_items.length) {
+          html += `<section><h3>Action Items (${m.action_items.length})</h3><ul>`;
+          for (const ai of m.action_items) {
+            html += `<li>${esc(ai.text || ai.title)}<span class="action-owner">${esc(ai.owner || '')}</span></li>`;
+          }
+          html += '</ul></section>';
+        }
+
+        if (m.decisions && m.decisions.length) {
+          html += `<section><h3>Decisions (${m.decisions.length})</h3><ul>`;
+          for (const d of m.decisions) {
+            html += `<li>${esc(d)}</li>`;
+          }
+          html += '</ul></section>';
+        }
+
+        if (m.meeting_notes && m.meeting_notes.length) {
+          html += `<section><h3>Meeting Notes</h3>`;
+          for (const note of m.meeting_notes) {
+            if (note.title) html += `<p><strong>${esc(note.title)}</strong></p>`;
+            if (note.text) html += `<p>${esc(note.text)}</p>`;
+          }
+          html += '</section>';
+        }
+
+        if (m.transcript_text && !m.transcript_text.startsWith('[available')) {
+          html += `<section><h3>Transcript</h3><pre style="white-space:pre-wrap;font-size:13px;color:var(--text2);max-height:400px;overflow-y:auto;background:var(--surface2);padding:14px;border-radius:8px;">${esc(m.transcript_text)}</pre></section>`;
+        }
+
+        content.innerHTML = html;
+      } catch (err) {
+        content.innerHTML = `<p>Failed to load meeting: ${err.message}</p>`;
+      }
+    }
+
+    function closeModal() {
+      document.getElementById('modal').classList.remove('active');
+    }
+
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+    // Stats
+    async function loadStats() {
+      const el = document.getElementById('stats-content');
+      el.innerHTML = '<div class="loading"><span class="spinner"></span></div>';
+
+      try {
+        const res = await fetch('/api/stats');
+        const s = await res.json();
+
+        let html = `<div class="stats-grid">
+          <div class="stat-card">
+            <div class="label">Total Meetings</div>
+            <div class="value">${s.total_meetings || 0}</div>
+            <div class="sub">${s.date_range?.earliest ? 'Since ' + new Date(s.date_range.earliest).toLocaleDateString() : ''}</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Date Range</div>
+            <div class="value" style="font-size:16px;">${s.date_range?.earliest ? new Date(s.date_range.earliest).toLocaleDateString() : '—'} – ${s.date_range?.latest ? new Date(s.date_range.latest).toLocaleDateString() : '—'}</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Data Sources</div>
+            <div class="value" style="font-size:16px;">${(s.data_sources || []).map(d => d.source + ': ' + d.count).join(', ') || '—'}</div>
+          </div>
+        </div>`;
+
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">';
+
+        if (s.top_attendees?.length) {
+          html += `<div class="stat-card"><div class="label">Top Attendees</div><ul class="ranked-list">`;
+          for (const a of s.top_attendees) {
+            html += `<li><span>${esc(a.name)}</span><span class="count">${a.count}</span></li>`;
+          }
+          html += '</ul></div>';
+        }
+
+        if (s.top_topics?.length) {
+          html += `<div class="stat-card"><div class="label">Top Topics</div><ul class="ranked-list">`;
+          for (const t of s.top_topics) {
+            html += `<li><span>${esc(t.topic)}</span><span class="count">${t.count}</span></li>`;
+          }
+          html += '</ul></div>';
+        }
+
+        if (s.top_action_owners?.length) {
+          html += `<div class="stat-card"><div class="label">Top Action Item Owners</div><ul class="ranked-list">`;
+          for (const o of s.top_action_owners) {
+            html += `<li><span>${esc(o.owner)}</span><span class="count">${o.count}</span></li>`;
+          }
+          html += '</ul></div>';
+        }
+
+        html += '</div>';
+        el.innerHTML = html;
+      } catch (err) {
+        el.innerHTML = `<div class="empty-state">Failed to load stats: ${err.message}</div>`;
+      }
+    }
+
+    // Sync status
+    async function loadSyncStatus() {
+      const el = document.getElementById('sync-info');
+      try {
+        const res = await fetch('/sync/status');
+        const s = await res.json();
+
+        el.innerHTML = `
+          <div class="item">
+            <div class="label">Last Sync</div>
+            <div class="val">${s.lastSync ? new Date(s.lastSync).toLocaleString() : 'Never'}</div>
+          </div>
+          <div class="item">
+            <div class="label">Status</div>
+            <div class="val">${s.syncInProgress ? '&#9881; Syncing...' : 'Idle'}</div>
+          </div>
+          <div class="item">
+            <div class="label">Meetings Indexed</div>
+            <div class="val">${s.meetingsIndexed}</div>
+          </div>
+          <div class="item">
+            <div class="label">Last Error</div>
+            <div class="val" style="color:${s.lastSyncError ? 'var(--red)' : 'var(--green)'}">${s.lastSyncError || 'None'}</div>
+          </div>`;
+      } catch (err) {
+        el.innerHTML = `<div class="empty-state">Failed to load sync status</div>`;
+      }
+    }
+
+    // Sync UI management
+    function setSyncButtons(syncing) {
+      isSyncing = syncing;
+      const headerBtn = document.getElementById('sync-btn');
+      const manualBtn = document.getElementById('manual-sync-btn');
+      headerBtn.disabled = syncing;
+      headerBtn.textContent = syncing ? 'Syncing...' : 'Sync Now';
+      if (manualBtn) {
+        manualBtn.disabled = syncing;
+        manualBtn.textContent = syncing ? 'Syncing...' : 'Trigger Manual Sync';
+      }
+    }
+
+    function startSyncPolling() {
+      if (syncPollTimer) return;
+      syncPollTimer = setInterval(async () => {
+        try {
+          const res = await fetch('/sync/status');
+          const s = await res.json();
+          loadMeetings(currentPage);
+          if (!s.syncInProgress) {
+            clearInterval(syncPollTimer);
+            syncPollTimer = null;
+            setSyncButtons(false);
+            loadSyncStatus();
+          }
+        } catch { /* retry on next interval */ }
+      }, 3000);
+    }
+
+    async function checkInitialSyncState() {
+      try {
+        const res = await fetch('/sync/status');
+        const s = await res.json();
+        if (s.syncInProgress) {
+          setSyncButtons(true);
+          loadMeetings();
+          startSyncPolling();
+        }
+      } catch { /* ignore */ }
+    }
+
+    // Trigger sync
+    async function triggerSync() {
+      setSyncButtons(true);
+      loadMeetings(); // refresh empty state to show syncing message
+
+      try {
+        const res = await fetch('/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const data = await res.json();
+
+        if (data.skipped) {
+          // Already syncing — start polling until it finishes
+          startSyncPolling();
+          return;
+        }
+
+        const headerBtn = document.getElementById('sync-btn');
+        headerBtn.textContent = data.synced !== undefined ? `Synced ${data.synced}` : 'Done';
+        setTimeout(() => setSyncButtons(false), 3000);
+        loadMeetings();
+        loadSyncStatus();
+      } catch (err) {
+        document.getElementById('sync-btn').textContent = 'Failed';
+        setTimeout(() => setSyncButtons(false), 3000);
+      }
+    }
+
+    // Escape HTML
+    function esc(s) {
+      if (!s) return '';
+      const d = document.createElement('div');
+      d.textContent = String(s);
+      return d.innerHTML;
+    }
+
+    // Load current user info
+    async function loadUser() {
+      try {
+        const res = await fetch('/auth/me');
+        if (res.status === 401) { window.location.href = '/auth/login'; return; }
+        const user = await res.json();
+        const el = document.getElementById('user-info');
+        el.textContent = user.name || user.email;
+      } catch { /* ignore */ }
+    }
+
+    // Init
+    loadUser();
+    checkHealth();
+    checkInitialSyncState();
+    loadMeetings();
+    setInterval(checkHealth, 30000);
+  </script>
+</body>
+</html>
