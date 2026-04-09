@@ -12,11 +12,16 @@ info() { echo -e "${GREEN}[update]${NC} $*"; }
 warn() { echo -e "${YELLOW}[update]${NC} $*"; }
 
 info "Pulling latest changes..."
-git pull || {
+PULL_OUTPUT=$(git pull 2>&1) || {
   warn "Could not pull — you may have local changes. Continuing with current version."
+  PULL_OUTPUT=""
 }
 
-info "Rebuilding and restarting containers..."
-docker compose up -d --build
+if echo "$PULL_OUTPUT" | grep -q "Already up to date"; then
+  info "Already up to date — skipping rebuild."
+else
+  info "Changes detected. Rebuilding and restarting containers..."
+  docker compose up -d --build
+fi
 
 info "Update complete. Run 'teams-mcp logs' to check status."
