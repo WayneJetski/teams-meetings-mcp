@@ -120,34 +120,69 @@ configure_mcp() {
 MCPEOF
   fi
 
-  # Desired config: native HTTP transport (avoids ~16s cold start from `npx mcp-remote`)
-  # Writes/updates the entry idempotently — also migrates older `npx mcp-remote` configs.
-  node -e "
+  # Desired config: native HTTP transport (avoids ~16s cold start from `npx mcp-remote`).
+  # Ensures the global entry is correct AND migrates any project-scoped entries
+  # (under projects.<path>.mcpServers) that older versions may have written.
+  CONFIGURE_OUTPUT=$(node -e "
     const fs = require('fs');
-    const cfg = JSON.parse(fs.readFileSync('$MCP_CONFIG', 'utf8'));
-    if (!cfg.mcpServers) cfg.mcpServers = {};
-    const existing = cfg.mcpServers['$MCP_SERVER_NAME'];
+    const path = '$MCP_CONFIG';
+    const name = '$MCP_SERVER_NAME';
     const desired = { type: 'http', url: '$MCP_URL' };
-    const isCurrent =
-      existing &&
-      existing.type === desired.type &&
-      existing.url === desired.url &&
-      !existing.command &&
-      !existing.args;
-    if (isCurrent) {
-      console.log('current');
-    } else {
-      cfg.mcpServers['$MCP_SERVER_NAME'] = desired;
-      fs.writeFileSync('$MCP_CONFIG', JSON.stringify(cfg, null, 2) + '\n');
-      console.log(existing ? 'migrated' : 'added');
+    const cfg = JSON.parse(fs.readFileSync(path, 'utf8'));
+
+    if (!cfg.mcpServers) cfg.mcpServers = {};
+
+    let changed = false;
+    let action = 'current';
+
+    const globalExisting = cfg.mcpServers[name];
+    const globalIsCurrent =
+      globalExisting &&
+      globalExisting.type === desired.type &&
+      globalExisting.url === desired.url &&
+      !globalExisting.command &&
+      !globalExisting.args;
+    if (!globalIsCurrent) {
+      cfg.mcpServers[name] = { ...desired };
+      changed = true;
+      action = globalExisting ? 'migrated' : 'added';
     }
-  " | while read -r RESULT; do
-    case "$RESULT" in
-      current)  info "MCP server '$MCP_SERVER_NAME' already configured (HTTP transport).";;
-      migrated) info "Migrated MCP server '$MCP_SERVER_NAME' to native HTTP transport. Restart Claude Code to pick up the change.";;
-      added)    info "Added MCP server '$MCP_SERVER_NAME' (HTTP transport). Restart Claude Code to pick up the change.";;
+    console.log(action + ' (global)');
+
+    if (cfg.projects && typeof cfg.projects === 'object') {
+      for (const projectPath of Object.keys(cfg.projects)) {
+        const proj = cfg.projects[projectPath];
+        if (!proj || typeof proj !== 'object') continue;
+        if (!proj.mcpServers || typeof proj.mcpServers !== 'object') continue;
+        const existing = proj.mcpServers[name];
+        if (!existing) continue;
+        const isCurrent =
+          existing.type === desired.type &&
+          existing.url === desired.url &&
+          !existing.command &&
+          !existing.args;
+        if (!isCurrent) {
+          proj.mcpServers[name] = { ...desired };
+          changed = true;
+          console.log('migrated ' + projectPath);
+        }
+      }
+    }
+
+    if (changed) {
+      fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n');
+    }
+  " 2>&1) || warn "MCP config update failed: $CONFIGURE_OUTPUT"
+
+  while IFS= read -r LINE; do
+    [ -z "$LINE" ] && continue
+    case "$LINE" in
+      "current (global)")  info "MCP server '$MCP_SERVER_NAME' already configured (HTTP transport).";;
+      "added (global)")    info "Added MCP server '$MCP_SERVER_NAME' (HTTP transport). Restart Claude Code to pick up the change.";;
+      "migrated (global)") info "Migrated MCP server '$MCP_SERVER_NAME' to native HTTP transport. Restart Claude Code to pick up the change.";;
+      "migrated "*)        info "Migrated MCP server '$MCP_SERVER_NAME' under project ${LINE#migrated } to native HTTP transport.";;
     esac
-  done
+  done <<< "$CONFIGURE_OUTPUT"
 }
 
 configure_mcp
