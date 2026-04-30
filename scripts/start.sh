@@ -120,27 +120,34 @@ configure_mcp() {
 MCPEOF
   fi
 
-  # Check if our server is already configured
-  if node -e "
-    const cfg = JSON.parse(require('fs').readFileSync('$MCP_CONFIG', 'utf8'));
-    const servers = cfg.mcpServers || {};
-    process.exit(servers['$MCP_SERVER_NAME'] ? 0 : 1);
-  " 2>/dev/null; then
-    info "MCP server '$MCP_SERVER_NAME' already configured in Claude."
-  else
-    info "Adding MCP server '$MCP_SERVER_NAME' to Claude config..."
-    node -e "
-      const fs = require('fs');
-      const cfg = JSON.parse(fs.readFileSync('$MCP_CONFIG', 'utf8'));
-      if (!cfg.mcpServers) cfg.mcpServers = {};
-      cfg.mcpServers['$MCP_SERVER_NAME'] = {
-        command: 'npx',
-        args: ['-y', 'mcp-remote', '$MCP_URL']
-      };
+  # Desired config: native HTTP transport (avoids ~16s cold start from `npx mcp-remote`)
+  # Writes/updates the entry idempotently — also migrates older `npx mcp-remote` configs.
+  node -e "
+    const fs = require('fs');
+    const cfg = JSON.parse(fs.readFileSync('$MCP_CONFIG', 'utf8'));
+    if (!cfg.mcpServers) cfg.mcpServers = {};
+    const existing = cfg.mcpServers['$MCP_SERVER_NAME'];
+    const desired = { type: 'http', url: '$MCP_URL' };
+    const isCurrent =
+      existing &&
+      existing.type === desired.type &&
+      existing.url === desired.url &&
+      !existing.command &&
+      !existing.args;
+    if (isCurrent) {
+      console.log('current');
+    } else {
+      cfg.mcpServers['$MCP_SERVER_NAME'] = desired;
       fs.writeFileSync('$MCP_CONFIG', JSON.stringify(cfg, null, 2) + '\n');
-    "
-    info "MCP server added. Restart Claude Code to pick up the change."
-  fi
+      console.log(existing ? 'migrated' : 'added');
+    }
+  " | while read -r RESULT; do
+    case "$RESULT" in
+      current)  info "MCP server '$MCP_SERVER_NAME' already configured (HTTP transport).";;
+      migrated) info "Migrated MCP server '$MCP_SERVER_NAME' to native HTTP transport. Restart Claude Code to pick up the change.";;
+      added)    info "Added MCP server '$MCP_SERVER_NAME' (HTTP transport). Restart Claude Code to pick up the change.";;
+    esac
+  done
 }
 
 configure_mcp
