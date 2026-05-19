@@ -61,8 +61,21 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-# Validate required vars are set (not just placeholder values)
-source .env 2>/dev/null || true
+# Validate required vars are set (not just placeholder values).
+# Parse .env line-by-line instead of `source`-ing it — values like
+# `SYNC_CRON=*/15 * * * *` would otherwise glob-expand and silently abort the script.
+while IFS= read -r line || [ -n "$line" ]; do
+  line="${line%$'\r'}"
+  [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+  [[ "$line" != *=* ]] && continue
+  key="${line%%=*}"
+  value="${line#*=}"
+  # Strip surrounding single or double quotes if present
+  if [[ "$value" =~ ^\".*\"$ ]] || [[ "$value" =~ ^\'.*\'$ ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+  printf -v "$key" '%s' "$value"
+done < .env
 
 # Auto-generate SESSION_SECRET if missing or still the placeholder
 SESSION_SECRET="${SESSION_SECRET:-}"
@@ -186,6 +199,59 @@ MCPEOF
 }
 
 configure_mcp
+
+# ── Configure MCP in Claude Desktop (macOS) ──────────────────────────
+configure_claude_desktop() {
+  [[ "$OSTYPE" != "darwin"* ]] && return 0
+
+  local desktop_dir="$HOME/Library/Application Support/Claude"
+  local desktop_config="$desktop_dir/claude_desktop_config.json"
+
+  # If the parent dir doesn't exist, Claude Desktop hasn't been installed/run — skip silently.
+  if [ ! -d "$desktop_dir" ]; then
+    return 0
+  fi
+
+  if [ ! -f "$desktop_config" ]; then
+    info "Creating Claude Desktop MCP config at $desktop_config"
+    echo '{"mcpServers":{}}' > "$desktop_config"
+  fi
+
+  local desktop_output
+  desktop_output=$(DESKTOP_CONFIG_PATH="$desktop_config" MCP_NAME="$MCP_SERVER_NAME" MCP_URL_VAL="$MCP_URL" node -e "
+    const fs = require('fs');
+    const path = process.env.DESKTOP_CONFIG_PATH;
+    const name = process.env.MCP_NAME;
+    const desired = { type: 'http', url: process.env.MCP_URL_VAL };
+    const cfg = JSON.parse(fs.readFileSync(path, 'utf8'));
+
+    if (!cfg.mcpServers) cfg.mcpServers = {};
+
+    const existing = cfg.mcpServers[name];
+    const isCurrent =
+      existing &&
+      existing.type === desired.type &&
+      existing.url === desired.url &&
+      !existing.command &&
+      !existing.args;
+
+    if (isCurrent) {
+      console.log('current');
+    } else {
+      cfg.mcpServers[name] = { ...desired };
+      fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n');
+      console.log(existing ? 'migrated' : 'added');
+    }
+  " 2>&1) || { warn "Claude Desktop MCP config update failed: $desktop_output"; return 0; }
+
+  case "$desktop_output" in
+    "current")  info "Claude Desktop: MCP server '$MCP_SERVER_NAME' already configured.";;
+    "added")    info "Claude Desktop: Added MCP server '$MCP_SERVER_NAME'. Restart Claude Desktop to pick up the change.";;
+    "migrated") info "Claude Desktop: Migrated MCP server '$MCP_SERVER_NAME' to native HTTP transport. Restart Claude Desktop to pick up the change.";;
+  esac
+}
+
+configure_claude_desktop
 
 # ── Background service (macOS launchd) ───────────────────────────────
 if [[ "$OSTYPE" == "darwin"* ]]; then
