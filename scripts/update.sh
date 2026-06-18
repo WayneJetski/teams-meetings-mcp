@@ -130,14 +130,14 @@ fi
 if [[ "$OSTYPE" == "darwin"* ]] && command -v node >/dev/null 2>&1; then
   DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
   if [ -f "$DESKTOP_CONFIG" ]; then
-    DESKTOP_OUTPUT=$(DESKTOP_CONFIG_PATH="$DESKTOP_CONFIG" MCP_NAME="$MCP_SERVER_NAME" MCP_URL_VAL="$MCP_URL" node -e "
+    DESKTOP_OUTPUT=$(DESKTOP_CONFIG_PATH="$DESKTOP_CONFIG" MCP_NAME="$MCP_SERVER_NAME" MCP_URL_VAL="$MCP_URL" NPMRC_PATH="$REPO_DIR/.npmrc" node -e "
       const fs = require('fs');
       const { applyDesktopMcpConfig } = require('$REPO_DIR/scripts/lib/desktop-mcp-config.cjs');
       const path = process.env.DESKTOP_CONFIG_PATH;
       let cfg;
       try { cfg = JSON.parse(fs.readFileSync(path, 'utf8')); }
       catch (e) { console.log('PARSE_ERROR ' + e.message); process.exit(0); }
-      const { config, action } = applyDesktopMcpConfig(cfg, process.env.MCP_NAME, process.env.MCP_URL_VAL);
+      const { config, action } = applyDesktopMcpConfig(cfg, process.env.MCP_NAME, process.env.MCP_URL_VAL, process.env.NPMRC_PATH);
       if (action !== 'current') {
         fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
       }

@@ -222,12 +222,12 @@ configure_claude_desktop() {
   # load here, so we wrap the endpoint in `npx mcp-remote`. The transform also
   # migrates any older broken `type: http` entry back to the stdio form.
   local desktop_output
-  desktop_output=$(DESKTOP_CONFIG_PATH="$desktop_config" MCP_NAME="$MCP_SERVER_NAME" MCP_URL_VAL="$MCP_URL" node -e "
+  desktop_output=$(DESKTOP_CONFIG_PATH="$desktop_config" MCP_NAME="$MCP_SERVER_NAME" MCP_URL_VAL="$MCP_URL" NPMRC_PATH="$REPO_DIR/.npmrc" node -e "
     const fs = require('fs');
     const { applyDesktopMcpConfig } = require('$REPO_DIR/scripts/lib/desktop-mcp-config.cjs');
     const path = process.env.DESKTOP_CONFIG_PATH;
     const cfg = JSON.parse(fs.readFileSync(path, 'utf8'));
-    const { config, action } = applyDesktopMcpConfig(cfg, process.env.MCP_NAME, process.env.MCP_URL_VAL);
+    const { config, action } = applyDesktopMcpConfig(cfg, process.env.MCP_NAME, process.env.MCP_URL_VAL, process.env.NPMRC_PATH);
     if (action !== 'current') {
       fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
     }
