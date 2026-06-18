@@ -123,4 +123,33 @@ else
   fi
 fi
 
+# ── Repair Claude Desktop MCP config (macOS) ─────────────────────────
+# Claude Desktop can't use the native HTTP transport, so an earlier version
+# that wrote `{ type: http }` there left it broken. Migrate it back to the
+# stdio `npx mcp-remote` form so existing users get fixed on `teams-mcp update`.
+if [[ "$OSTYPE" == "darwin"* ]] && command -v node >/dev/null 2>&1; then
+  DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+  if [ -f "$DESKTOP_CONFIG" ]; then
+    DESKTOP_OUTPUT=$(DESKTOP_CONFIG_PATH="$DESKTOP_CONFIG" MCP_NAME="$MCP_SERVER_NAME" MCP_URL_VAL="$MCP_URL" node -e "
+      const fs = require('fs');
+      const { applyDesktopMcpConfig } = require('$REPO_DIR/scripts/lib/desktop-mcp-config.cjs');
+      const path = process.env.DESKTOP_CONFIG_PATH;
+      let cfg;
+      try { cfg = JSON.parse(fs.readFileSync(path, 'utf8')); }
+      catch (e) { console.log('PARSE_ERROR ' + e.message); process.exit(0); }
+      const { config, action } = applyDesktopMcpConfig(cfg, process.env.MCP_NAME, process.env.MCP_URL_VAL);
+      if (action !== 'current') {
+        fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
+      }
+      console.log(action);
+    " 2>&1) || { warn "Claude Desktop MCP config repair failed: $DESKTOP_OUTPUT"; DESKTOP_OUTPUT=""; }
+
+    case "$DESKTOP_OUTPUT" in
+      "migrated") info "Claude Desktop: migrated '$MCP_SERVER_NAME' to mcp-remote stdio transport. Restart Claude Desktop to pick up the change.";;
+      "added")    info "Claude Desktop: added '$MCP_SERVER_NAME' (mcp-remote stdio). Restart Claude Desktop to pick up the change.";;
+      "PARSE_ERROR "*) warn "Could not parse $DESKTOP_CONFIG: ${DESKTOP_OUTPUT#PARSE_ERROR }";;
+    esac
+  fi
+fi
+
 info "Update complete. Run 'teams-mcp logs' to check status."

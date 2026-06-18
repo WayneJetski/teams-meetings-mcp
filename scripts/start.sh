@@ -217,37 +217,27 @@ configure_claude_desktop() {
     echo '{"mcpServers":{}}' > "$desktop_config"
   fi
 
+  # Claude Desktop only reliably supports stdio servers (command + args). The
+  # native `{ type: http, url }` shape used for Claude Code silently fails to
+  # load here, so we wrap the endpoint in `npx mcp-remote`. The transform also
+  # migrates any older broken `type: http` entry back to the stdio form.
   local desktop_output
   desktop_output=$(DESKTOP_CONFIG_PATH="$desktop_config" MCP_NAME="$MCP_SERVER_NAME" MCP_URL_VAL="$MCP_URL" node -e "
     const fs = require('fs');
+    const { applyDesktopMcpConfig } = require('$REPO_DIR/scripts/lib/desktop-mcp-config.cjs');
     const path = process.env.DESKTOP_CONFIG_PATH;
-    const name = process.env.MCP_NAME;
-    const desired = { type: 'http', url: process.env.MCP_URL_VAL };
     const cfg = JSON.parse(fs.readFileSync(path, 'utf8'));
-
-    if (!cfg.mcpServers) cfg.mcpServers = {};
-
-    const existing = cfg.mcpServers[name];
-    const isCurrent =
-      existing &&
-      existing.type === desired.type &&
-      existing.url === desired.url &&
-      !existing.command &&
-      !existing.args;
-
-    if (isCurrent) {
-      console.log('current');
-    } else {
-      cfg.mcpServers[name] = { ...desired };
-      fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n');
-      console.log(existing ? 'migrated' : 'added');
+    const { config, action } = applyDesktopMcpConfig(cfg, process.env.MCP_NAME, process.env.MCP_URL_VAL);
+    if (action !== 'current') {
+      fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
     }
+    console.log(action);
   " 2>&1) || { warn "Claude Desktop MCP config update failed: $desktop_output"; return 0; }
 
   case "$desktop_output" in
-    "current")  info "Claude Desktop: MCP server '$MCP_SERVER_NAME' already configured.";;
-    "added")    info "Claude Desktop: Added MCP server '$MCP_SERVER_NAME'. Restart Claude Desktop to pick up the change.";;
-    "migrated") info "Claude Desktop: Migrated MCP server '$MCP_SERVER_NAME' to native HTTP transport. Restart Claude Desktop to pick up the change.";;
+    "current")  info "Claude Desktop: MCP server '$MCP_SERVER_NAME' already configured (mcp-remote stdio).";;
+    "added")    info "Claude Desktop: Added MCP server '$MCP_SERVER_NAME' (mcp-remote stdio). Restart Claude Desktop to pick up the change.";;
+    "migrated") info "Claude Desktop: Migrated MCP server '$MCP_SERVER_NAME' to mcp-remote stdio transport. Restart Claude Desktop to pick up the change.";;
   esac
 }
 
