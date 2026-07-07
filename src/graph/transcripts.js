@@ -50,14 +50,16 @@ export async function fetchFirstTranscript(onlineMeetingId) {
  * For recurring meetings, multiple transcripts exist under the same onlineMeetingId;
  * this matches the correct one by comparing createdDateTime to the event window.
  *
- * Falls back to fetchFirstTranscript when only one transcript exists.
+ * Always requires the transcript's createdDateTime to fall inside the occurrence
+ * window (plus buffer). We deliberately do NOT special-case a single available
+ * transcript: a recurring series often has just one transcript early on (or before
+ * the current occurrence has been transcribed), and returning it unconditionally
+ * would attach an unrelated occurrence's transcript to this one. Returning null
+ * instead lets a later sync pick up the correct transcript once it exists.
  */
 export async function fetchTranscriptForTimeWindow(onlineMeetingId, eventStart, eventEnd) {
   const transcripts = await listTranscripts(onlineMeetingId);
   if (transcripts.length === 0) return null;
-  if (transcripts.length === 1) {
-    return fetchTranscript(onlineMeetingId, transcripts[0].id);
-  }
 
   const windowStart = new Date(eventStart);
   const windowEnd = new Date(eventEnd);
