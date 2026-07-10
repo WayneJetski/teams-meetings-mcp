@@ -171,6 +171,13 @@ else
     sed_inplace "s/^AZURE_CLIENT_SECRET=.*/AZURE_CLIENT_SECRET=${INPUT_CLIENT_SECRET}/" "$ENV_FILE"
     sed_inplace "s/^SESSION_SECRET=.*/SESSION_SECRET=${INPUT_SESSION_SECRET}/" "$ENV_FILE"
 
+    # Generate the Elasticsearch secret (the `elastic` user password the app
+    # uses to talk to Elasticsearch).
+    # shellcheck source=lib/env-secrets.sh
+    source "$CLONE_DIR/scripts/lib/env-secrets.sh"
+    ensure_env_secret ES_SECRET "$ENV_FILE"
+    info "Generated random Elasticsearch secret."
+
     info ".env configured."
     SKIP_START=false
   }

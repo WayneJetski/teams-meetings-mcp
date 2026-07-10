@@ -4,17 +4,29 @@ services:
     container_name: meetings-es
     environment:
       - discovery.type=single-node
-      - xpack.security.enabled=false
+      # Security is ENABLED: the meeting data indexed here is sensitive.
+      # HTTP (not HTTPS) is fine because ES is not published to the host and
+      # only reachable over the internal `knowledge-net` bridge network.
+      - xpack.security.enabled=true
       - xpack.security.http.ssl.enabled=false
+      # The official ES image re-applies this on every start (via the keystore
+      # bootstrap password), so `elastic` authenticates with ES_SECRET on both
+      # fresh and existing data volumes. scripts/lib/es-security.sh verifies it
+      # and resets as a fallback.
+      - ELASTIC_PASSWORD=${ES_SECRET}
       - ES_JAVA_OPTS=-Xms512m -Xmx1g
-    ports:
-      - "127.0.0.1:9200:9200"
+    # No `ports:` mapping — ES is intentionally NOT exposed on the host.
+    # Use scripts/es-tunnel.sh for on-demand direct access.
     volumes:
       - es-data:/usr/share/elasticsearch/data
     networks:
       - knowledge-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      # Credential-free: a 401 means ES is up and enforcing auth (which is what
+      # we want). Keeping the password out of the healthcheck also avoids the
+      # circular dependency during migration, when the password is set after
+      # the container starts.
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:9200 | grep -qE '200|401'"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -29,6 +41,8 @@ services:
       - "4005:4005"
     environment:
       - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=${ES_SECRET}
       - PORT=4005
       - MCP_PATH=/mcp
       - NODE_ENV=production

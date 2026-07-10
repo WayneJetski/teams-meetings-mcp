@@ -21,6 +21,23 @@ if echo "$PULL_OUTPUT" | grep -q "Already up to date"; then
   info "Already up to date — skipping rebuild."
 else
   info "Changes detected. Rebuilding and restarting containers..."
+
+  # Backfill ES_SECRET for installs created before Elasticsearch auth existed,
+  # then bring ES up first and make sure the `elastic` password matches it.
+  # This migrates pre-existing (unsecured) data volumes seamlessly — no data is
+  # wiped and the app can authenticate as soon as it starts.
+  # shellcheck source=lib/env-secrets.sh
+  source "$REPO_DIR/scripts/lib/env-secrets.sh"
+  ensure_env_secret ES_SECRET .env
+
+  info "Starting Elasticsearch..."
+  docker compose up -d --build elasticsearch
+
+  # shellcheck source=lib/es-security.sh
+  source "$REPO_DIR/scripts/lib/es-security.sh"
+  ensure_es_password || warn "Continuing despite Elasticsearch auth warning above."
+
+  info "Starting the MCP server..."
   docker compose up -d --build
 fi
 

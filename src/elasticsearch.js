@@ -1,11 +1,14 @@
 import { Client } from '@elastic/elasticsearch';
 import config from './config.js';
+import { buildEsClientOptions } from './es-client-options.js';
 
-const client = new Client({
-  node: config.elasticsearch.url,
-  maxRetries: 5,
-  requestTimeout: 30000,
-});
+const client = new Client(
+  buildEsClientOptions({
+    url: config.elasticsearch.url,
+    username: config.elasticsearch.username,
+    password: config.elasticsearch.password,
+  })
+);
 const INDEX = config.elasticsearch.index;
 
 const MEETINGS_MAPPING = {

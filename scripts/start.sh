@@ -101,8 +101,26 @@ for var in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
   fi
 done
 
+# ── Elasticsearch secret ─────────────────────────────────────────────
+# Generate a strong ES_SECRET (the Elasticsearch `elastic` password) if the
+# .env doesn't have one yet. Exports ES_SECRET for docker compose + the
+# credential-enforcement step below.
+# shellcheck source=lib/env-secrets.sh
+source "$REPO_DIR/scripts/lib/env-secrets.sh"
+ensure_env_secret ES_SECRET .env
+
 # ── Docker ────────────────────────────────────────────────────────────
-info "Starting Docker containers..."
+# Two-phase bring-up: start Elasticsearch first, make sure the `elastic`
+# password matches ES_SECRET (needed to migrate pre-existing, unsecured data
+# volumes), then start the app so it can authenticate immediately.
+info "Starting Elasticsearch..."
+docker compose up -d --build elasticsearch
+
+# shellcheck source=lib/es-security.sh
+source "$REPO_DIR/scripts/lib/es-security.sh"
+ensure_es_password || warn "Continuing despite Elasticsearch auth warning above."
+
+info "Starting the MCP server..."
 docker compose up -d --build
 
 info "Waiting for server to become healthy..."
