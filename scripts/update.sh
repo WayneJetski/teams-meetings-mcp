@@ -17,10 +17,31 @@ PULL_OUTPUT=$(git pull 2>&1) || {
   PULL_OUTPUT=""
 }
 
+# Backfill ES_SECRET unconditionally. The need for it is a property of the code
+# now on disk, not of whether this particular `git pull` moved anything — an
+# install that reached this version out of band (manual pull, IDE, etc.) still
+# needs it, or a later container restart would render ELASTIC_PASSWORD empty.
+# ensure_env_secret is idempotent: a no-op when ES_SECRET is already set.
+# shellcheck source=lib/env-secrets.sh
+source "$REPO_DIR/scripts/lib/env-secrets.sh"
+ensure_env_secret ES_SECRET .env
+
 if echo "$PULL_OUTPUT" | grep -q "Already up to date"; then
   info "Already up to date — skipping rebuild."
 else
   info "Changes detected. Rebuilding and restarting containers..."
+
+  # Two-phase bring-up: start ES first, make sure the `elastic` password matches
+  # ES_SECRET (this migrates pre-existing, unsecured data volumes seamlessly —
+  # no data is wiped), then start the app so it can authenticate immediately.
+  info "Starting Elasticsearch..."
+  docker compose up -d --build elasticsearch
+
+  # shellcheck source=lib/es-security.sh
+  source "$REPO_DIR/scripts/lib/es-security.sh"
+  ensure_es_password || warn "Continuing despite Elasticsearch auth warning above."
+
+  info "Starting the MCP server..."
   docker compose up -d --build
 fi
 

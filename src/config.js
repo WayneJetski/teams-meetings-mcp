@@ -18,6 +18,10 @@ const config = {
   elasticsearch: {
     url: optional('ELASTICSEARCH_URL', 'http://localhost:9200'),
     index: optional('ES_INDEX', 'meetings'),
+    username: optional('ELASTICSEARCH_USERNAME', 'elastic'),
+    // Nullable so local, non-Docker dev against an unsecured ES still works.
+    // Docker always supplies this (mapped from ES_SECRET in docker-compose.yml).
+    password: process.env.ELASTICSEARCH_PASSWORD || null,
   },
 
   azure: {

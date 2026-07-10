@@ -7,6 +7,7 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
 ## Architecture
 
 - **Two Docker containers**: Elasticsearch 8.x + Node.js MCP server
+- **Elasticsearch security**: Auth enabled; the app connects as the `elastic` user with `ES_SECRET` (auto-generated in `.env`, backfilled on update via `scripts/lib/es-security.sh`). ES has no host port — it's reachable only inside the Docker network. Use `scripts/es-tunnel.sh` for on-demand direct access.
 - **Auth**: OAuth2 authorization code flow via Azure AD — users sign in through the web dashboard
 - **Route protection**: All web/API routes require an authenticated session; `/health` and MCP endpoint are public
 - **Sync engine**: Cron-scheduled + on-demand ingestion from Graph API (runs only when auth tokens are cached)
@@ -40,6 +41,10 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
 Or manually:
 ```bash
 cp .env.example .env  # configure Azure credentials + SESSION_SECRET
+# ES_SECRET must be a non-empty random value before `docker compose up`, or ES
+# boots with an empty password and the app can't authenticate. The start/update
+# scripts generate it automatically; to do it by hand:
+#   node -e "console.log('ES_SECRET='+require('crypto').randomBytes(32).toString('hex'))" >> .env
 docker compose up -d
 ```
 

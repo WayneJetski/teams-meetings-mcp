@@ -21,7 +21,9 @@ else
   echo -e "MCP server: ${RED}not responding${NC}"
 fi
 
-if curl -sf http://localhost:9200/_cluster/health > /dev/null 2>&1; then
+# Elasticsearch is not exposed on the host, so check the container's health
+# state (reported by the compose healthcheck) instead of hitting the port.
+if [ "$(docker inspect --format '{{.State.Health.Status}}' meetings-es 2>/dev/null)" = "healthy" ]; then
   echo -e "Elasticsearch: ${GREEN}healthy${NC}"
 else
   echo -e "Elasticsearch: ${RED}not responding${NC}"
