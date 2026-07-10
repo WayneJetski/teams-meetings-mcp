@@ -26,7 +26,14 @@ ensure_env_secret() {
   fi
 
   if [ -z "$current" ] || [ "$current" = "change-me-to-a-random-string" ]; then
-    current=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+    if command -v node >/dev/null 2>&1; then
+      current=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+    elif command -v openssl >/dev/null 2>&1; then
+      current=$(openssl rand -hex 32)
+    else
+      echo "[env-secrets] need 'node' or 'openssl' on PATH to generate ${var_name}" >&2
+      return 1
+    fi
     if [ -f "$env_file" ] && grep -qE "^${var_name}=" "$env_file"; then
       # Use | as the sed delimiter — the hex value never contains it.
       if [[ "$os" == darwin* ]]; then

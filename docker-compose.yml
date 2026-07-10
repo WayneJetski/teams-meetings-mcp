@@ -9,10 +9,12 @@ services:
       # only reachable over the internal `knowledge-net` bridge network.
       - xpack.security.enabled=true
       - xpack.security.http.ssl.enabled=false
-      # The official ES image re-applies this on every start (via the keystore
-      # bootstrap password), so `elastic` authenticates with ES_SECRET on both
-      # fresh and existing data volumes. scripts/lib/es-security.sh verifies it
-      # and resets as a fallback.
+      # For the pinned ES image this is re-applied on every start (via the
+      # keystore bootstrap password), so `elastic` authenticates with ES_SECRET
+      # on both fresh and existing data volumes (verified in testing).
+      # scripts/lib/es-security.sh verifies this and resets the password as a
+      # fallback for cases it can't cover (version drift, a password changed
+      # out of band).
       - ELASTIC_PASSWORD=${ES_SECRET}
       - ES_JAVA_OPTS=-Xms512m -Xmx1g
     # No `ports:` mapping — ES is intentionally NOT exposed on the host.

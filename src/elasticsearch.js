@@ -59,8 +59,22 @@ export async function waitForReady(maxAttempts = 30, intervalMs = 2000) {
         console.log(JSON.stringify({ level: 'info', msg: `Elasticsearch ready`, status: health.status }));
         return;
       }
-    } catch {
-      console.log(JSON.stringify({ level: 'info', msg: `Waiting for Elasticsearch`, attempt, maxAttempts }));
+    } catch (err) {
+      const statusCode = err?.meta?.statusCode;
+      if (statusCode === 401 || statusCode === 403) {
+        // Distinguish an auth mismatch from "still starting up" so a wrong
+        // ES_SECRET is diagnosable instead of an opaque timeout. The status
+        // code is safe to log; the credential itself is never included.
+        console.log(JSON.stringify({
+          level: 'error',
+          msg: 'Elasticsearch rejected credentials — check ES_SECRET matches the elastic user password',
+          statusCode,
+          attempt,
+          maxAttempts,
+        }));
+      } else {
+        console.log(JSON.stringify({ level: 'info', msg: `Waiting for Elasticsearch`, attempt, maxAttempts }));
+      }
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }

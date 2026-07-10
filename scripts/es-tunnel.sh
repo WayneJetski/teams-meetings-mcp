@@ -25,6 +25,13 @@ NC='\033[0m'
 PORT="${1:-9200}"
 ES_CONTAINER="meetings-es"
 
+# Validate the port is a bare integer so it can't alter the -p bind address.
+if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+  echo -e "${RED}Port must be a number (got: '$PORT').${NC}"
+  echo -e "Usage: ${BOLD}$(basename "$0") [local_port]${NC}"
+  exit 1
+fi
+
 # The container must be running to discover its network.
 if ! docker inspect "$ES_CONTAINER" >/dev/null 2>&1; then
   echo -e "${RED}Elasticsearch container '$ES_CONTAINER' is not running.${NC}"
@@ -33,7 +40,7 @@ if ! docker inspect "$ES_CONTAINER" >/dev/null 2>&1; then
 fi
 
 NETWORK=$(docker inspect "$ES_CONTAINER" \
-  --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' | head -1)
+  --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null | head -1 || true)
 if [ -z "$NETWORK" ]; then
   echo -e "${RED}Could not determine the Docker network for '$ES_CONTAINER'.${NC}"
   exit 1

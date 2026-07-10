@@ -41,6 +41,10 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
 Or manually:
 ```bash
 cp .env.example .env  # configure Azure credentials + SESSION_SECRET
+# ES_SECRET must be a non-empty random value before `docker compose up`, or ES
+# boots with an empty password and the app can't authenticate. The start/update
+# scripts generate it automatically; to do it by hand:
+#   node -e "console.log('ES_SECRET='+require('crypto').randomBytes(32).toString('hex'))" >> .env
 docker compose up -d
 ```
 
