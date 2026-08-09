@@ -22,6 +22,12 @@ export function parseVtt(vttContent) {
       const end = tsMatch[2];
       i++;
 
+      // Skip blank lines between the timestamp and its text. text/vtt puts the
+      // text on the very next line; the unattributed
+      // application/vnd.microsoft.graph.transcript+text format (used when the
+      // tenant disables speaker attribution) inserts a blank line first.
+      while (i < lines.length && lines[i].trim() === '') i++;
+
       // Collect all text lines until the next blank line
       const textLines = [];
       while (i < lines.length && lines[i].trim() !== '') {

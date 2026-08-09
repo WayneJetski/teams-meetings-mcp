@@ -24,12 +24,24 @@ export async function listTranscripts(onlineMeetingId) {
  */
 export async function fetchTranscript(onlineMeetingId, transcriptId) {
   const userId = getCurrentUserId();
+  const basePath = `/v1.0/users/${userId}/onlineMeetings/${onlineMeetingId}/transcripts/${transcriptId}/content`;
   try {
-    const vttContent = await graphGetText(
-      `/v1.0/users/${userId}/onlineMeetings/${onlineMeetingId}/transcripts/${transcriptId}/content?$format=text/vtt`,
-      'text/vtt'
-    );
-    return parseVtt(vttContent);
+    let content;
+    try {
+      // Preferred: speaker-attributed WebVTT (includes <v Speaker> voice tags).
+      content = await graphGetText(`${basePath}?$format=text/vtt`, 'text/vtt');
+    } catch (err) {
+      // A tenant admin can disable speaker attribution. Graph then rejects the
+      // attributed text/vtt format with a SpeakerAttributionNotAllowed 403 and
+      // requires the unattributed transcript+text format, which is selectable
+      // ONLY via the Accept header (not the $format query param). Retry with it.
+      if (err.message?.includes('SpeakerAttributionNotAllowed')) {
+        content = await graphGetText(basePath, 'application/vnd.microsoft.graph.transcript+text');
+      } else {
+        throw err;
+      }
+    }
+    return parseVtt(content);
   } catch (err) {
     console.log(JSON.stringify({ level: 'warn', msg: `Failed to fetch transcript ${transcriptId}`, error: err.message }));
     return null;
