@@ -1,17 +1,36 @@
-import { graphGet, graphGetText } from './client.js';
+import { graphGetAll, graphGetText } from './client.js';
 import { getCurrentUserId } from './auth.js';
 import { parseVtt } from '../utils/vttParser.js';
 
 /**
  * List available transcripts for a meeting.
+ *
+ * A recurring series accumulates one transcript per occurrence under a single
+ * onlineMeetingId, and Graph returns only the first page by default (20). On a
+ * daily standup that is roughly four weeks of history, so an unpaged list can
+ * omit the very occurrence being matched. `notOlderThan` bounds the page walk
+ * to the window the caller actually needs.
  */
-export async function listTranscripts(onlineMeetingId) {
+export async function listTranscripts(onlineMeetingId, { notOlderThan } = {}) {
   const userId = getCurrentUserId();
+  const floorMs = notOlderThan ? new Date(notOlderThan).getTime() : null;
+
   try {
-    const result = await graphGet(
-      `/v1.0/users/${userId}/onlineMeetings/${onlineMeetingId}/transcripts`
+    return await graphGetAll(
+      `/v1.0/users/${userId}/onlineMeetings/${onlineMeetingId}/transcripts`,
+      { $top: '50' },
+      {
+        // Transcripts come back newest-first, so keep paging only while the
+        // oldest one seen is still newer than the caller's floor.
+        shouldContinue:
+          floorMs === null
+            ? () => false
+            : (items) => {
+                const oldest = items[items.length - 1]?.createdDateTime;
+                return oldest ? new Date(oldest).getTime() > floorMs : false;
+              },
+      }
     );
-    return result.value || [];
   } catch (err) {
     if (err.message?.includes('404')) return [];
     throw err;
@@ -70,15 +89,16 @@ export async function fetchFirstTranscript(onlineMeetingId) {
  * instead lets a later sync pick up the correct transcript once it exists.
  */
 export async function fetchTranscriptForTimeWindow(onlineMeetingId, eventStart, eventEnd) {
-  const transcripts = await listTranscripts(onlineMeetingId);
-  if (transcripts.length === 0) return null;
-
   const windowStart = new Date(eventStart);
   const windowEnd = new Date(eventEnd);
   // Allow a 1-hour buffer before/after the event to account for early joins or late transcription
   const bufferMs = 60 * 60 * 1000;
   const rangeStart = new Date(windowStart.getTime() - bufferMs);
   const rangeEnd = new Date(windowEnd.getTime() + bufferMs);
+
+  // Page back far enough to reach this occurrence, no further.
+  const transcripts = await listTranscripts(onlineMeetingId, { notOlderThan: rangeStart });
+  if (transcripts.length === 0) return null;
 
   const match = transcripts.find((t) => {
     const created = new Date(t.createdDateTime);

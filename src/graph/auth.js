@@ -47,11 +47,28 @@ export function getCurrentUserId() {
   throw new Error('No Graph user ID available — sign in via the web dashboard first');
 }
 
-/** True when we have a cached MSAL account we can use for silent token acquisition. */
-export async function isAuthenticated() {
+/**
+ * Restore the authenticated user from the persisted MSAL cache.
+ * Returns the Graph user ID, or null when no account is cached.
+ *
+ * `authenticatedUserId` is module state, so it is lost on every process start,
+ * while the refresh token survives in the mounted cache volume. Without this,
+ * a restarted container holds valid credentials but no user ID, and every sync
+ * throws "No Graph user ID available" until someone signs in through the
+ * dashboard again — silently, since the scheduler only logs the failure.
+ */
+export async function restoreAuthenticatedUser() {
   await loadCache();
   const accounts = await cca.getTokenCache().getAllAccounts();
-  return accounts.length > 0;
+  if (accounts.length === 0) return null;
+
+  authenticatedUserId = authenticatedUserId || accounts[0].localAccountId;
+  return authenticatedUserId;
+}
+
+/** True when we have a cached MSAL account we can use for silent token acquisition. */
+export async function isAuthenticated() {
+  return (await restoreAuthenticatedUser()) !== null;
 }
 
 // ── OAuth authorization code flow ────────────────────────────────────
