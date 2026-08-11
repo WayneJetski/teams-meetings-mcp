@@ -174,6 +174,26 @@ Elasticsearch directly (for debugging or one-off queries):
 
 It prints an authenticated `curl` example and closes when you press Ctrl-C.
 
+## Troubleshooting
+
+**`cluster_block_exception` / "disk usage exceeded flood-stage watermark" on the `meetings` index, but disk looks fine:**
+
+Elasticsearch sets a `read_only_allow_delete` block on an index when it believes disk usage crossed the flood-stage watermark (95% by default). If `docker exec meetings-es df -h /usr/share/elasticsearch/data` shows plenty of free space, the block can be stale: ES's own cluster task queue got wedged, so the disk-threshold monitor never got to re-check and lift it. Confirm via the tunnel:
+
+```bash
+./scripts/es-tunnel.sh
+curl -u elastic:$ES_SECRET http://127.0.0.1:9200/_cluster/pending_tasks
+```
+
+A `cluster_reroute(disk threshold monitor)` task stuck in the queue for an unreasonable amount of time is the tell. Fix:
+
+```bash
+docker restart meetings-es   # clears the wedged task queue and forces a fresh disk check
+curl -X PUT -u elastic:$ES_SECRET http://127.0.0.1:9200/meetings/_settings \
+  -H 'Content-Type: application/json' \
+  -d '{"index.blocks.read_only_allow_delete": null}'
+```
+
 ## Project Structure
 
 ```
