@@ -2,8 +2,10 @@ import config from '../config.js';
 import { discoverMeetings, getOnlineMeetingByJoinUrl, extractAttendees } from '../graph/meetings.js';
 import { fetchAiInsights } from '../graph/insights.js';
 import { fetchTranscriptForTimeWindow } from '../graph/transcripts.js';
+import { restoreAuthenticatedUser } from '../graph/auth.js';
 import { indexMeeting, meetingExists, getLastSyncTimestamp, saveLastSyncTimestamp } from '../elasticsearch.js';
 import { durationMinutes, now } from '../utils/timestamps.js';
+import { resolveLookbackDays, computeWatermark } from './syncWindow.js';
 
 // Track sync state
 let syncInProgress = false;
@@ -40,23 +42,23 @@ export async function runSync(lookbackDays) {
   lastSyncError = null;
   const dataTier = config.graph.dataTier;
 
+  // Rehydrate the Graph user from the persisted token cache so a sync works on
+  // a cold start, without waiting for an interactive sign-in. Callers that
+  // reach runSync directly (POST /sync) get this too.
+  await restoreAuthenticatedUser();
+
   // Incremental sync: if we have a persisted sync timestamp and no explicit
   // lookbackDays override, only look back to the last sync (plus a 1-day
   // overlap buffer to catch late-arriving transcripts).
   // When lookbackDays is explicitly provided (force sync), ignore the
   // persisted timestamp and use the full window.
   const overrideDays = lookbackDays || config.sync.lookbackDays;
-  let effectiveDays = overrideDays;
-
-  if (!lookbackDays) {
-    const lastSuccessfulSync = await getLastSyncTimestamp();
-    if (lastSuccessfulSync) {
-      const msSinceLastSync = Date.now() - new Date(lastSuccessfulSync).getTime();
-      const daysSinceLastSync = msSinceLastSync / (1000 * 60 * 60 * 24);
-      const incrementalDays = Math.ceil(daysSinceLastSync) + 1; // +1 day overlap buffer
-      effectiveDays = Math.min(incrementalDays, overrideDays);
-    }
-  }
+  const effectiveDays = resolveLookbackDays({
+    explicitLookbackDays: lookbackDays,
+    configuredLookbackDays: overrideDays,
+    lastSuccessfulSync: lookbackDays ? null : await getLastSyncTimestamp(),
+    nowMs: Date.now(),
+  });
 
   console.log(JSON.stringify({
     level: 'info',
@@ -70,6 +72,12 @@ export async function runSync(lookbackDays) {
   let skipped = 0;
   let errors = 0;
 
+  // Start time of the oldest occurrence this run could not capture. The
+  // watermark is held back to it so the next run retries instead of stepping
+  // over the gap. See computeWatermark in ./syncWindow.js.
+  let oldestUncapturedStart = null;
+  let uncaptured = 0;
+
   // Cache online meeting lookups by joinWebUrl to avoid redundant API calls
   // for recurring meetings that share the same join link.
   const onlineMeetingCache = new Map();
@@ -79,9 +87,22 @@ export async function runSync(lookbackDays) {
     console.log(JSON.stringify({ level: 'info', msg: `Discovered ${events.length} calendar events with online meetings` }));
 
     for (const event of events) {
+      const eventStart = event.start?.dateTime ? new Date(event.start.dateTime + 'Z').toISOString() : null;
+
+      // Record an occurrence we could not index, so the watermark stays behind
+      // it. ISO-8601 UTC strings from toISOString() compare correctly with <.
+      const markUncaptured = () => {
+        uncaptured++;
+        if (eventStart && (!oldestUncapturedStart || eventStart < oldestUncapturedStart)) {
+          oldestUncapturedStart = eventStart;
+        }
+      };
+
       try {
         const joinWebUrl = event.onlineMeeting?.joinUrl;
         if (!joinWebUrl) {
+          // An online meeting with no join URL is malformed and will never
+          // resolve; retrying it forever would pin the window open.
           skipped++;
           continue;
         }
@@ -95,12 +116,12 @@ export async function runSync(lookbackDays) {
 
         if (!onlineMeeting) {
           console.log(JSON.stringify({ level: 'warn', msg: `Could not resolve online meeting for "${event.subject}"` }));
+          markUncaptured();
           skipped++;
           continue;
         }
 
         const onlineMeetingId = onlineMeeting.id;
-        const eventStart = event.start?.dateTime ? new Date(event.start.dateTime + 'Z').toISOString() : null;
         const eventEnd = event.end?.dateTime ? new Date(event.end.dateTime + 'Z').toISOString() : null;
         const instanceId = buildInstanceId(onlineMeetingId, eventStart);
 
@@ -176,10 +197,12 @@ export async function runSync(lookbackDays) {
           console.log(JSON.stringify({ level: 'info', msg: `Indexed meeting "${doc.title}" (${eventStart})`, instanceId }));
         } else {
           console.log(JSON.stringify({ level: 'info', msg: `No data available for "${event.subject}" (${eventStart}), skipping index` }));
+          markUncaptured();
           skipped++;
         }
       } catch (err) {
         errors++;
+        markUncaptured();
         const errorDetail = err.message || err.body?.error?.reason || err.meta?.body?.error?.reason || String(err);
         console.log(JSON.stringify({
           level: 'error',
@@ -191,9 +214,29 @@ export async function runSync(lookbackDays) {
       }
     }
 
-    await saveLastSyncTimestamp(now());
-    console.log(JSON.stringify({ level: 'info', msg: 'Sync complete', synced, skipped, errors }));
-    return { synced, skipped, errors };
+    const watermark = computeWatermark({
+      oldestUncapturedStart,
+      nowMs: Date.now(),
+      maxLookbackDays: overrideDays,
+    });
+    await saveLastSyncTimestamp(watermark);
+
+    // Surface a held-back watermark at warn level: it means occurrences are
+    // still missing, which was previously invisible in the logs.
+    const isHeldBack = Boolean(oldestUncapturedStart);
+    console.log(JSON.stringify({
+      level: isHeldBack ? 'warn' : 'info',
+      msg: isHeldBack
+        ? 'Sync complete with uncaptured occurrences — watermark held back for retry'
+        : 'Sync complete',
+      synced,
+      skipped,
+      errors,
+      uncaptured,
+      oldestUncapturedStart,
+      watermark,
+    }));
+    return { synced, skipped, errors, uncaptured, watermark };
   } catch (err) {
     lastSyncError = err.message;
     console.log(JSON.stringify({ level: 'error', msg: 'Sync failed', error: err.message }));
