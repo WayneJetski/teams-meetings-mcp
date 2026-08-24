@@ -36,6 +36,7 @@ usage() {
   echo "  teams-mcp stop         Stop the server"
   echo "  teams-mcp logs         Show container logs"
   echo "  teams-mcp update       Pull latest changes and restart"
+  echo "  teams-mcp update --force  Rebuild and restart even if already up to date"
   echo "  teams-mcp status       Show container status"
   echo "  teams-mcp uninstall    Remove teams-mcp completely"
   echo "  teams-mcp help         Show this help message"

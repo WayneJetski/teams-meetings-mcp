@@ -29,6 +29,7 @@ teams-mcp              # Start the server (default)
 teams-mcp stop         # Stop containers
 teams-mcp logs         # Tail container logs
 teams-mcp update       # Pull latest + rebuild
+teams-mcp update --force  # Rebuild + restart even if already up to date
 teams-mcp status       # Container & health status
 teams-mcp uninstall    # Remove teams-mcp completely
 teams-mcp help         # Show all commands
