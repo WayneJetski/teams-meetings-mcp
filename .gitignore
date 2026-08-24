@@ -4,3 +4,4 @@ node_modules/
 .token-cache/
 docker-compose.override.yml
 logs/
+.claude/settings.local.json
