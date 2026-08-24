@@ -11,6 +11,13 @@ NC='\033[0m'
 info() { echo -e "${GREEN}[update]${NC} $*"; }
 warn() { echo -e "${YELLOW}[update]${NC} $*"; }
 
+FORCE=false
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=true ;;
+  esac
+done
+
 info "Pulling latest changes..."
 PULL_OUTPUT=$(git pull 2>&1) || {
   warn "Could not pull — you may have local changes. Continuing with current version."
@@ -26,10 +33,14 @@ PULL_OUTPUT=$(git pull 2>&1) || {
 source "$REPO_DIR/scripts/lib/env-secrets.sh"
 ensure_env_secret ES_SECRET .env
 
-if echo "$PULL_OUTPUT" | grep -q "Already up to date"; then
+if [ "$FORCE" != true ] && echo "$PULL_OUTPUT" | grep -q "Already up to date"; then
   info "Already up to date — skipping rebuild."
 else
-  info "Changes detected. Rebuilding and restarting containers..."
+  if [ "$FORCE" = true ]; then
+    info "--force passed. Rebuilding and restarting containers regardless of pull result..."
+  else
+    info "Changes detected. Rebuilding and restarting containers..."
+  fi
 
   # Two-phase bring-up: start ES first, make sure the `elastic` password matches
   # ES_SECRET (this migrates pre-existing, unsecured data volumes seamlessly —
