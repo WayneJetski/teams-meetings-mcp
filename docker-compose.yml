@@ -23,6 +23,13 @@ services:
       - es-data:/usr/share/elasticsearch/data
     networks:
       - knowledge-net
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
+        reservations:
+          memory: 1g
     healthcheck:
       # Credential-free: a 401 means ES is up and enforcing auth (which is what
       # we want). Keeping the password out of the healthcheck also avoids the
@@ -67,6 +74,13 @@ services:
     networks:
       - knowledge-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512m
+        reservations:
+          memory: 128m
 
 volumes:
   es-data:
