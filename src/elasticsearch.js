@@ -87,7 +87,10 @@ export async function ensureIndex() {
   if (!exists) {
     await client.indices.create({
       index: INDEX,
-      body: { mappings: MEETINGS_MAPPING },
+      // Single-node cluster: a replica can never be assigned to a second
+      // node, so number_of_replicas: 1 (the default) leaves the index
+      // permanently yellow instead of green.
+      body: { settings: { number_of_replicas: 0 }, mappings: MEETINGS_MAPPING },
     });
     console.log(JSON.stringify({ level: 'info', msg: `Created index "${INDEX}"` }));
   }
