@@ -1,5 +1,5 @@
 import { ConfidentialClientApplication } from '@azure/msal-node';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import config from '../config.js';
 
@@ -23,12 +23,26 @@ const cca = new ConfidentialClientApplication({
 // ── Cache persistence ────────────────────────────────────────────────
 
 async function loadCache() {
+  let data;
   try {
-    const data = await readFile(TOKEN_CACHE_PATH, 'utf-8');
-    cca.getTokenCache().deserialize(data);
+    data = await readFile(TOKEN_CACHE_PATH, 'utf-8');
   } catch {
-    // No cached tokens yet — first run
+    return; // No cached tokens yet — first run
   }
+
+  try {
+    JSON.parse(data);
+  } catch {
+    // MSAL's TokenCache.deserialize() stores the raw string on the cache
+    // instance before parsing it, so handing it corrupt JSON poisons every
+    // later serialize() call (on saveCache) for the rest of the process —
+    // validate first and drop the file so a corrupt cache self-heals into
+    // "no cached tokens" instead of breaking auth until someone restarts.
+    await unlink(TOKEN_CACHE_PATH).catch(() => {});
+    return;
+  }
+
+  cca.getTokenCache().deserialize(data);
 }
 
 async function saveCache() {
