@@ -3,7 +3,7 @@ import { discoverMeetings, getOnlineMeetingByJoinUrl, extractAttendees } from '.
 import { fetchAiInsights } from '../graph/insights.js';
 import { listTranscripts, fetchTranscript } from '../graph/transcripts.js';
 import { restoreAuthenticatedUser } from '../graph/auth.js';
-import { indexMeeting, meetingExists, getLastSyncTimestamp, saveLastSyncTimestamp } from '../elasticsearch.js';
+import { indexMeeting, meetingExists, getLastSyncTimestamp, saveLastSyncTimestamp, getWriteBlocks } from '../elasticsearch.js';
 import { sessionTimes, buildMeetingDoc } from '../meetingDoc.js';
 import { resolveLookbackDays, computeWatermark } from './syncWindow.js';
 import { buildSessionId } from './sessionId.js';
@@ -33,6 +33,25 @@ export async function runSync(lookbackDays) {
   syncInProgress = true;
   lastSyncError = null;
   const dataTier = config.graph.dataTier;
+
+  // A blocked index fails every single write. Without this the run walks the
+  // whole window and logs one cluster_block_exception per meeting, burying the
+  // one fact that matters.
+  try {
+    const { writesBlocked, blocks } = await getWriteBlocks();
+    if (writesBlocked) {
+      lastSyncError = `Elasticsearch is refusing writes (${blocks.join(', ')})`;
+      syncInProgress = false;
+      console.log(JSON.stringify({
+        level: 'error',
+        msg: 'Sync aborted — Elasticsearch is refusing writes. Free disk space; Elasticsearch releases a flood-stage block itself once usage drops below the high watermark.',
+        blocks,
+      }));
+      return { blocked: true, blocks };
+    }
+  } catch (err) {
+    console.log(JSON.stringify({ level: 'warn', msg: 'Could not check index write blocks, continuing', error: err.message }));
+  }
 
   // Rehydrate the Graph user from the persisted token cache so a sync works on
   // a cold start, without waiting for an interactive sign-in. Callers that

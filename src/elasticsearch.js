@@ -1,6 +1,7 @@
 import { Client } from '@elastic/elasticsearch';
 import config from './config.js';
 import { buildEsClientOptions } from './es-client-options.js';
+import { interpretBlocks, summariseDisk, overallStatus } from './health.js';
 
 const client = new Client(
   buildEsClientOptions({
@@ -446,9 +447,44 @@ export async function listMeetings({ limit = 20, offset = 0 } = {}) {
   };
 }
 
+/**
+ * Whether anything is currently stopping writes to the meetings index.
+ *
+ * A full disk trips Elasticsearch's flood-stage watermark and applies
+ * `read_only_allow_delete`, after which every sync write fails while cluster
+ * health stays green — the failure is otherwise invisible to callers.
+ */
+export async function getWriteBlocks() {
+  const settings = await client.indices.getSettings({ index: INDEX, name: 'index.blocks.*' });
+  return interpretBlocks(settings);
+}
+
+export async function getDiskUsage() {
+  const rows = await client.cat.allocation({ format: 'json', bytes: 'b' });
+  return summariseDisk(rows);
+}
+
 export async function healthCheck() {
   const health = await client.cluster.health();
-  return { status: health.status, numberOfNodes: health.number_of_nodes };
+
+  // Block and disk state are diagnostic, not load-bearing: a failure to read
+  // them must not turn a healthy server into an unhealthy one.
+  let writeBlocks = { writesBlocked: false, blocks: [] };
+  let disk = null;
+  try {
+    [writeBlocks, disk] = await Promise.all([getWriteBlocks(), getDiskUsage()]);
+  } catch (err) {
+    console.log(JSON.stringify({ level: 'warn', msg: 'Could not read index blocks or disk usage', error: err.message }));
+  }
+
+  return {
+    status: health.status,
+    numberOfNodes: health.number_of_nodes,
+    writesBlocked: writeBlocks.writesBlocked,
+    blocks: writeBlocks.blocks,
+    disk,
+    serviceStatus: overallStatus({ writesBlocked: writeBlocks.writesBlocked, disk }),
+  };
 }
 
 /**
