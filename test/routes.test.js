@@ -1,9 +1,11 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-// config.js reads these at import time and throws without them. Set before the
-// dynamic import below, and only when absent, so a developer's real .env still
-// wins locally (dotenv does not overwrite existing process.env entries).
+// config.js reads these at import time and throws without them. These run
+// before the dynamic import below, and dotenv does not overwrite an entry that
+// is already set, so these placeholders take precedence over a developer's
+// .env — which is what keeps the run hermetic. Only the surrounding shell can
+// override them. Do not move them after the import.
 process.env.SESSION_SECRET ||= 'test-session-secret';
 process.env.AZURE_TENANT_ID ||= '00000000-0000-0000-0000-000000000000';
 process.env.AZURE_CLIENT_ID ||= '11111111-1111-1111-1111-111111111111';
@@ -31,11 +33,19 @@ before(async () => {
   // Dynamic so the env above is in place first.
   const { createApp } = await import('../src/app.js');
   server = createApp().listen(0);
-  await new Promise((resolve) => server.once('listening', resolve));
+  // Settle on 'error' too: node:test applies no timeout by default, so a
+  // listener that never comes up would otherwise hang the run instead of
+  // failing it.
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => new Promise((resolve) => server.close(resolve)));
+// Tolerate a failed `before`: without the guard this throws on an undefined
+// server and buries the real cause.
+after(() => (server ? new Promise((resolve) => server.close(resolve)) : undefined));
 
 // Every route below is requested with no session cookie. That is the whole
 // point: these assert what an unauthenticated caller can reach.
@@ -70,6 +80,15 @@ describe('public routes', () => {
       assert.equal(res.status, 404, `${path} status`);
       assert.deepEqual(await res.json(), { error: 'not_found' }, `${path} body`);
     }
+  });
+
+  test('POST /register 404s as JSON', async () => {
+    // Same contract as the two endpoints above, and the only one of the three
+    // registered with `app.post` rather than `app.all`, so the likeliest to
+    // drift across the requireAuth line unnoticed.
+    const res = await request('/register', { method: 'POST', accept: 'application/json' });
+    assert.equal(res.status, 404);
+    assert.deepEqual(await res.json(), { error: 'not_found' });
   });
 
   test('/auth/me reports no session rather than redirecting', async () => {

@@ -5,7 +5,7 @@ import { runSync, getSyncStatus } from '../sync/engine.js';
 
 const router = Router();
 
-// Note: /health is mounted directly in index.js (public, no auth required)
+// Note: /health is mounted directly in app.js (public, no auth required)
 
 router.post('/sync', async (req, res) => {
   const lookbackDays = req.body?.lookback_days;

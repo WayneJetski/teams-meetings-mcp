@@ -129,7 +129,7 @@ Set `GRAPH_DATA_TIER` in `.env` to control what gets synced:
 | `SYNC_CRON` | No | `0 * * * *` | Cron schedule for auto-sync (default: hourly) |
 | `SYNC_LOOKBACK_DAYS` | No | `30` | Maximum window a sync will look back over |
 | `ES_MAX_RETRIES` | No | `5` | Elasticsearch client retry attempts per request |
-| `ES_REQUEST_TIMEOUT_MS` | No | `30000` | Elasticsearch client per-request timeout |
+| `ES_REQUEST_TIMEOUT_MS` | No | `30000` | Elasticsearch client per-request timeout (ms) |
 
 ### How the sync window moves
 
