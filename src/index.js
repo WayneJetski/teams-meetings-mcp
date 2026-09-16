@@ -41,8 +41,11 @@ app.use((req, res, next) => {
 // Health check — always public for monitoring
 app.get('/health', async (req, res) => {
   try {
-    const es = await healthCheck();
-    res.json({ status: 'ok', elasticsearch: es, timestamp: new Date().toISOString() });
+    const { serviceStatus, ...es } = await healthCheck();
+    // Degraded stays a 200: search, the MCP tools and the dashboard all keep
+    // working when only writes are blocked, and a non-2xx would report the
+    // whole server as down.
+    res.json({ status: serviceStatus, elasticsearch: es, timestamp: new Date().toISOString() });
   } catch (err) {
     res.status(503).json({ status: 'unhealthy', error: err.message, timestamp: new Date().toISOString() });
   }

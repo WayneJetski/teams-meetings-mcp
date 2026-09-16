@@ -10,6 +10,16 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
 - **Elasticsearch security**: Auth enabled; the app connects as the `elastic` user with `ES_SECRET` (auto-generated in `.env`, backfilled on update via `scripts/lib/es-security.sh`). ES has no host port — it's reachable only inside the Docker network. Use `scripts/es-tunnel.sh` for on-demand direct access.
 - **Auth**: OAuth2 authorization code flow via Azure AD — users sign in through the web dashboard
 - **Route protection**: All web/API routes require an authenticated session; `/health` and MCP endpoint are public
+- **Health**: `/health` reports `ok`, `degraded` or `unhealthy`. Degraded means
+  the index is refusing writes, or a node has crossed a disk watermark — a full
+  disk trips Elasticsearch's flood-stage watermark and applies
+  `read_only_allow_delete`, after which every sync write fails while cluster
+  health stays green. Degraded still answers 200, because reads, the MCP tools
+  and the dashboard all keep working; only ingest is impaired. A sync aborts
+  immediately when writes are blocked rather than failing once per meeting, and
+  the reason surfaces in `/sync/status`. Elasticsearch releases a flood-stage
+  block itself once usage drops back below the high watermark. Interpretation
+  rules are in `src/health.js` as pure, dependency-free functions.
 - **Sync engine**: Cron-scheduled + on-demand ingestion from Graph API (runs only
   when auth tokens are cached). Incremental runs derive their window from a
   persisted watermark that is held back at any occurrence that couldn't be
@@ -79,9 +89,6 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
   `aiInsights` per online meeting rather than per call, so insights attach to an
   occurrence's first session only, and an insights-only install gets one document
   per occurrence keyed on its scheduled start.
-- **Elasticsearch going read-only is invisible to callers.** A full disk trips the
-  flood-stage watermark and every sync write fails with `cluster_block_exception`
-  while `/health` still reports green.
 
 ## MCP Tools
 

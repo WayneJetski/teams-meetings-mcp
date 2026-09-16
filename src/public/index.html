@@ -63,6 +63,7 @@
 
     .status-dot.healthy { background: var(--green); }
     .status-dot.unhealthy { background: var(--red); }
+    .status-dot.degraded { background: var(--yellow, #d9a441); }
     .status-dot.unknown { background: var(--text2); }
 
     .status-label {
@@ -538,6 +539,12 @@
         const data = await res.json();
         if (data.status === 'ok') {
           el.innerHTML = '<span class="status-dot healthy"></span> Connected';
+        } else if (data.status === 'degraded') {
+          const es = data.elasticsearch || {};
+          const detail = es.writesBlocked
+            ? 'writes blocked: ' + (es.blocks || []).join(', ')
+            : 'disk ' + (es.disk ? es.disk.usedPercent + '%' : 'high');
+          el.innerHTML = '<span class="status-dot degraded"></span> Degraded (' + detail + ')';
         } else {
           el.innerHTML = '<span class="status-dot unhealthy"></span> Unhealthy';
         }
