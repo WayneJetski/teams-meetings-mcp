@@ -249,24 +249,30 @@ queries and aggregations cannot be verified any other way — a query naming a
 nested field returns zero hits rather than an error. The suite **skips itself**
 when no node is configured, so `npm test` stays offline by default.
 
-To run them locally, start a throwaway node and point the suite at it:
+To run them locally:
 
 ```bash
-docker run -d --rm --name es-itest -p 19200:9200 \
-  -e discovery.type=single-node \
-  -e xpack.security.enabled=true \
-  -e xpack.security.http.ssl.enabled=false \
-  -e ELASTIC_PASSWORD=itest-secret \
-  docker.elastic.co/elasticsearch/elasticsearch:8.13.0
-
-ELASTICSEARCH_URL=http://localhost:19200 ELASTICSEARCH_PASSWORD=itest-secret \
-  npm run test:integration
-
-docker stop es-itest
+npm run test:integration
 ```
 
-Each run creates its own `meetings-itest-*` index and deletes it afterwards, so
-it never touches a real one.
+That starts a throwaway Elasticsearch on `127.0.0.1:19200`, waits for it, runs
+the suite (about 30 seconds), and removes the container again — including when
+the tests fail or you press Ctrl-C. It needs only Docker; the image matches the
+version `docker-compose.yml` runs, and the password is generated per run.
+
+Pass a port to avoid a collision: `npm run test:integration -- 19500`.
+
+To use an Elasticsearch you already have instead, set `ELASTICSEARCH_URL` and no
+container is started or stopped:
+
+```bash
+ELASTICSEARCH_URL=http://localhost:9200 ELASTICSEARCH_PASSWORD=... \
+  npm run test:integration
+```
+
+Each run indexes into its own `meetings-itest-*` index and deletes it afterwards,
+so it never touches a real one, and the real `meetings-es` container is never
+started, stopped or read.
 
 Every push to `main` and every pull request targeting it runs the unit suite on
 Node 20 and 22 via `.github/workflows/ci.yml`, then the integration suite against

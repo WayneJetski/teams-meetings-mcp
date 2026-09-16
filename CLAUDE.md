@@ -88,6 +88,10 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
   rather than an error, so `action_items` and `meeting_notes` queries fail
   silently. Both `search_meetings` and `get_action_items` shipped broken that
   way. Any new query touching those two fields needs a test here.
+- `npm run test:integration` (`scripts/test-integration.sh`) starts a throwaway
+  Elasticsearch, runs the suite and removes the container, failure or Ctrl-C
+  included. Set `ELASTICSEARCH_URL` to use an existing node instead and it
+  manages no container — that is how CI runs it.
 - Each run uses its own `meetings-itest-*` index and deletes it afterwards.
 - `describe(name, { skip: null }, fn)` cancels every nested suite on Node 22.
   Pass `false`, not `null`.
