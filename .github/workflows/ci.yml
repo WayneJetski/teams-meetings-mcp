@@ -39,3 +39,53 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  integration:
+    name: Integration tests (Elasticsearch)
+    runs-on: ubuntu-latest
+    # Only worth the container start-up once the pure-logic suite is green.
+    needs: test
+
+    services:
+      elasticsearch:
+        # Pinned to the version docker-compose.yml runs, so CI and production
+        # agree about mappings, nested queries and aggregation shapes.
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: 'true'
+          xpack.security.http.ssl.enabled: 'false'
+          # Not a secret: this container is created for one job, listens only on
+          # the runner's loopback interface, and is destroyed with it. Security
+          # is left on rather than disabled so the suite exercises the
+          # authenticated client path that production uses.
+          ELASTIC_PASSWORD: ci-throwaway-password
+          ES_JAVA_OPTS: -Xms512m -Xmx1g
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -sf -u elastic:ci-throwaway-password http://localhost:9200/_cluster/health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The same command as the unit job: the integration suite skips itself
+      # when ELASTICSEARCH_URL points at nothing, and runs when it does not.
+      - name: Run tests against Elasticsearch
+        run: npm test
+        env:
+          ELASTICSEARCH_URL: http://localhost:9200
+          ELASTICSEARCH_PASSWORD: ci-throwaway-password

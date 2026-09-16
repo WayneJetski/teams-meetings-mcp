@@ -79,6 +79,19 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
   (it also runs automatically at startup). Dry run by default; `--apply` to
   write. Idempotent, and safe to re-run.
 
+## Testing
+
+- `npm test` is offline: no Docker, no credentials, no network.
+- `test/integration/` talks to a real Elasticsearch and **skips itself** when
+  none is configured. It exists because the query layer cannot be verified any
+  other way: Elasticsearch answers a query against a nested field with zero hits
+  rather than an error, so `action_items` and `meeting_notes` queries fail
+  silently. Both `search_meetings` and `get_action_items` shipped broken that
+  way. Any new query touching those two fields needs a test here.
+- Each run uses its own `meetings-itest-*` index and deletes it afterwards.
+- `describe(name, { skip: null }, fn)` cancels every nested suite on Node 22.
+  Pass `false`, not `null`.
+
 ## Known Limits
 
 - **Multi-session occurrences older than Teams retention are unrecoverable and

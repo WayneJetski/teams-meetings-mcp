@@ -242,8 +242,35 @@ endpoints stay public, and every API route, the dashboard and unknown paths do
 not. It needs no Elasticsearch — `/health` is asserted only to be ungated, not
 to be green.
 
-Every push to `main` and every pull request targeting it runs the same suite on
-Node 20 and 22 via `.github/workflows/ci.yml`. To gate merges on it, add a branch
+### Integration tests
+
+`test/integration/` runs against a real Elasticsearch, because mappings, nested
+queries and aggregations cannot be verified any other way — a query naming a
+nested field returns zero hits rather than an error. The suite **skips itself**
+when no node is configured, so `npm test` stays offline by default.
+
+To run them locally, start a throwaway node and point the suite at it:
+
+```bash
+docker run -d --rm --name es-itest -p 19200:9200 \
+  -e discovery.type=single-node \
+  -e xpack.security.enabled=true \
+  -e xpack.security.http.ssl.enabled=false \
+  -e ELASTIC_PASSWORD=itest-secret \
+  docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+
+ELASTICSEARCH_URL=http://localhost:19200 ELASTICSEARCH_PASSWORD=itest-secret \
+  npm run test:integration
+
+docker stop es-itest
+```
+
+Each run creates its own `meetings-itest-*` index and deletes it afterwards, so
+it never touches a real one.
+
+Every push to `main` and every pull request targeting it runs the unit suite on
+Node 20 and 22 via `.github/workflows/ci.yml`, then the integration suite against
+an Elasticsearch service container. To gate merges on it, add a branch
 protection rule for `main` requiring the `Tests (Node 20)` and `Tests (Node 22)`
 status checks to pass.
 
