@@ -22,6 +22,11 @@ const config = {
     // Nullable so local, non-Docker dev against an unsecured ES still works.
     // Docker always supplies this (mapped from ES_SECRET in docker-compose.yml).
     password: process.env.ELASTICSEARCH_PASSWORD || null,
+    // Retry/timeout budget for the ES client. Defaults match the client's own
+    // and suit a container that may still be starting; tests lower them so an
+    // unreachable ES fails in milliseconds instead of retrying for ~14s.
+    maxRetries: parseInt(optional('ES_MAX_RETRIES', '5'), 10),
+    requestTimeout: parseInt(optional('ES_REQUEST_TIMEOUT_MS', '30000'), 10),
   },
 
   azure: {

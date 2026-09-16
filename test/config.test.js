@@ -41,3 +41,23 @@ test('keeps credentials out of the node URL', () => {
 
   assert.ok(!opts.node.includes('super-secret'), 'password must not be embedded in the node URL');
 });
+
+test('defaults the retry budget when none is given', () => {
+  const opts = buildEsClientOptions({ url: 'http://elasticsearch:9200' });
+
+  assert.equal(opts.maxRetries, 5);
+  assert.equal(opts.requestTimeout, 30000);
+});
+
+test('honours an explicit retry budget', () => {
+  // config.js exposes these as ES_MAX_RETRIES / ES_REQUEST_TIMEOUT_MS so a
+  // caller that cannot afford the default backoff can shorten it.
+  const opts = buildEsClientOptions({
+    url: 'http://elasticsearch:9200',
+    maxRetries: 0,
+    requestTimeout: 1000,
+  });
+
+  assert.equal(opts.maxRetries, 0);
+  assert.equal(opts.requestTimeout, 1000);
+});
