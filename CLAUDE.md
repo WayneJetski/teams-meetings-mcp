@@ -15,6 +15,37 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
   persisted watermark that is held back at any occurrence that couldn't be
   indexed, so gaps retry instead of sliding out of range. Window arithmetic
   lives in `src/sync/syncWindow.js` as pure, dependency-free functions.
+- **Document shape**: `src/meetingDoc.js` is the single writer-side definition.
+  The sync engine, the session-id migration, and `POST /ingest` all assemble
+  documents with `buildMeetingDoc`, so no path can write a partial record.
+  Reads go through `src/elasticsearch.js`. `time_source` distinguishes
+  `transcript` (times from the call), `scheduled_fallback` (times from the
+  booking, transcript unavailable) and `manual` (pushed in through the ingest
+  API).
+- **Document identity**: one document per *call session*, keyed
+  `<onlineMeetingId>_<session start>`. A booking held twice produces two
+  sessions under one calendar occurrence, so an occurrence-level key would
+  collapse them. `start_time`/`end_time`/`duration_minutes` report the actual
+  call (the transcript's `createdDateTime`/`endDateTime`), with the booking kept
+  in `scheduled_start_time`/`scheduled_end_time` and `time_source` recording
+  which of the two the primary fields came from. Graph orders a meeting's
+  transcript collection by transcript id, **not** by date, so no caller may
+  assume date ordering. Key construction is in `src/sync/sessionId.js` and
+  window matching in `src/sync/transcriptWindow.js`, both dependency-free.
+- **Schema migrations**: `src/sync/migrations.js` runs pending migrations once
+  per install at startup, after the HTTP listener (so the dashboard stays
+  reachable for sign-in) and before the scheduler. Gated on `schema_version` in
+  the sync-metadata document, so a migrated install pays one document read per
+  boot. A run that cannot resolve every document does not record the version and
+  retries next start, bounded by `MAX_MIGRATION_ATTEMPTS` so a permanently
+  unresolvable meeting (Graph 403/400) cannot force a full scan on every boot;
+  an unauthenticated install waits indefinitely instead of spending that budget.
+  Migrations never throw into startup.
+- **Retention**: Teams drops transcripts and the `onlineMeeting` object roughly
+  60 days after the meeting, after which Graph returns
+  `404 NotFound: 3004 Specified meeting is not found`. Past that point the index
+  is the only surviving copy, so nothing may be deleted before its replacement
+  is written.
 - **MCP transport**: Streamable HTTP on `/mcp`
 - **Data tiers**: `transcripts` (standard M365), `insights` (Copilot), or `both`
 
@@ -27,6 +58,30 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
 - `src/mcp/` — MCP server and tool definitions
 - `src/api/` — REST endpoints (sync, ingest, search)
 - `scripts/start.sh` — Startup script (pull, Docker, MCP config)
+- `scripts/migrate-session-ids.sh` — Runs the session-key migration by hand
+  (it also runs automatically at startup). Dry run by default; `--apply` to
+  write. Idempotent, and safe to re-run.
+
+## Known Limits
+
+- **Multi-session occurrences older than Teams retention are unrecoverable and
+  undetectable.** Graph cannot report that a second session ever existed, so an
+  occurrence that ran twice before its transcripts expired is permanently a
+  single document. An install that ran the pre-session-key schema for a while
+  will carry an unknown number of these.
+- **`listTranscripts` caps at `maxPages: 20` × `$top=50`** — 1000 transcripts per
+  online meeting. A years-old daily series exceeds that and is truncated; the
+  page walk logs a warning rather than failing silently.
+- **`deduplicateMeetings` groups by `title + start_time`** and predates per-session
+  documents. It is safe now only because distinct sessions have distinct actual
+  start times; it would have deleted a session under the old booking-based times.
+- **The `insights` data tier does not split sessions.** Graph exposes
+  `aiInsights` per online meeting rather than per call, so insights attach to an
+  occurrence's first session only, and an insights-only install gets one document
+  per occurrence keyed on its scheduled start.
+- **Elasticsearch going read-only is invisible to callers.** A full disk trips the
+  flood-stage watermark and every sync write fails with `cluster_block_exception`
+  while `/health` still reports green.
 
 ## MCP Tools
 

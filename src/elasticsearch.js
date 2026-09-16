@@ -16,12 +16,20 @@ const MEETINGS_MAPPING = {
     meeting_id: { type: 'keyword' },
     calendar_event_id: { type: 'keyword' },
     online_meeting_id: { type: 'keyword' },
+    transcript_id: { type: 'keyword' },
+    call_id: { type: 'keyword' },
     title: { type: 'keyword', fields: { text: { type: 'text' } } },
     organizer: { type: 'keyword' },
     attendees: { type: 'keyword' },
+
+    // Actual call session times; a booking held twice produces two documents
+    // with distinct start_time values under one scheduled window.
     start_time: { type: 'date' },
     end_time: { type: 'date' },
     duration_minutes: { type: 'integer' },
+    scheduled_start_time: { type: 'date' },
+    scheduled_end_time: { type: 'date' },
+    time_source: { type: 'keyword' },
 
     summary: { type: 'text' },
     meeting_notes: {
@@ -48,6 +56,13 @@ const MEETINGS_MAPPING = {
     data_source: { type: 'keyword' },
     synced_at: { type: 'date' },
     raw_graph_response: { type: 'object', enabled: false },
+
+    // Lives on the sync-metadata document, not on meetings. Declared so it is
+    // not left to dynamic mapping. doc_type and last_successful_sync are
+    // deliberately absent: they predate this mapping and are already mapped
+    // dynamically, and redeclaring doc_type as a keyword would conflict.
+    schema_version: { type: 'integer' },
+    migration_attempts: { type: 'integer' },
   },
 };
 
@@ -93,7 +108,12 @@ export async function ensureIndex() {
       body: { settings: { number_of_replicas: 0 }, mappings: MEETINGS_MAPPING },
     });
     console.log(JSON.stringify({ level: 'info', msg: `Created index "${INDEX}"` }));
+    return;
   }
+
+  // Adding fields to an existing mapping is non-breaking, and an index created
+  // by an older version otherwise leaves new fields dynamically typed.
+  await client.indices.putMapping({ index: INDEX, body: MEETINGS_MAPPING });
 }
 
 export async function indexMeeting(doc) {
@@ -109,6 +129,36 @@ export async function meetingExists(meetingId) {
   return client.exists({ index: INDEX, id: meetingId });
 }
 
+export async function deleteMeeting(meetingId) {
+  await client.delete({ index: INDEX, id: meetingId, refresh: 'wait_for' });
+}
+
+/**
+ * Walk every meeting document, oldest id first.
+ * Paged with search_after so the whole index is safe to iterate without a
+ * scroll context.
+ */
+export async function scanAllMeetings({ pageSize = 500 } = {}) {
+  const docs = [];
+  let searchAfter;
+
+  for (;;) {
+    const result = await client.search({
+      index: INDEX,
+      size: pageSize,
+      query: { exists: { field: 'meeting_id' } },
+      sort: [{ meeting_id: 'asc' }],
+      ...(searchAfter ? { search_after: searchAfter } : {}),
+    });
+
+    const hits = result.hits.hits;
+    if (hits.length === 0) return docs;
+
+    docs.push(...hits.map((h) => h._source));
+    searchAfter = hits[hits.length - 1].sort;
+  }
+}
+
 const SYNC_META_ID = '_sync_metadata';
 
 export async function getLastSyncTimestamp() {
@@ -121,13 +171,59 @@ export async function getLastSyncTimestamp() {
   }
 }
 
-export async function saveLastSyncTimestamp(isoTimestamp) {
-  await client.index({
+/**
+ * Merge fields into the sync-metadata document.
+ * An outright index() would drop whatever else lives there — the schema
+ * version, in particular, which every sync would otherwise reset.
+ */
+async function updateSyncMetadata(fields) {
+  await client.update({
     index: INDEX,
     id: SYNC_META_ID,
-    body: { last_successful_sync: isoTimestamp, doc_type: 'sync_metadata' },
+    doc: { doc_type: 'sync_metadata', ...fields },
+    doc_as_upsert: true,
     refresh: 'wait_for',
   });
+}
+
+export async function saveLastSyncTimestamp(isoTimestamp) {
+  await updateSyncMetadata({ last_successful_sync: isoTimestamp });
+}
+
+/**
+ * Schema version of the indexed data, used to run a migration exactly once per
+ * install. Absent on an index written before versioning began.
+ */
+export async function getSchemaVersion() {
+  try {
+    const result = await client.get({ index: INDEX, id: SYNC_META_ID });
+    return result._source?.schema_version ?? 0;
+  } catch (err) {
+    if (err.meta?.statusCode === 404) return 0;
+    throw err;
+  }
+}
+
+export async function saveSchemaVersion(version) {
+  await updateSyncMetadata({ schema_version: version, migration_attempts: 0 });
+}
+
+/**
+ * How many times a migration to the current version has been attempted without
+ * fully succeeding. Bounds the retry of documents Graph will never resolve.
+ */
+export async function getMigrationAttempts() {
+  try {
+    const result = await client.get({ index: INDEX, id: SYNC_META_ID });
+    return result._source?.migration_attempts ?? 0;
+  } catch (err) {
+    if (err.meta?.statusCode === 404) return 0;
+    throw err;
+  }
+}
+
+export async function saveMigrationAttempts(attempts) {
+  await updateSyncMetadata({ migration_attempts: attempts });
 }
 
 export async function searchMeetings({ query, attendee, dateFrom, dateTo, limit = 10 }) {
@@ -340,7 +436,7 @@ export async function listMeetings({ limit = 20, offset = 0 } = {}) {
     size: limit,
     sort: [{ start_time: 'desc' }],
     query: { bool: { must_not: [{ term: { doc_type: 'sync_metadata' } }] } },
-    _source: ['meeting_id', 'online_meeting_id', 'title', 'organizer', 'attendees', 'start_time', 'end_time', 'duration_minutes', 'summary', 'action_items', 'decisions', 'topics', 'data_source', 'synced_at'],
+    _source: ['meeting_id', 'online_meeting_id', 'call_id', 'title', 'organizer', 'attendees', 'start_time', 'end_time', 'duration_minutes', 'scheduled_start_time', 'scheduled_end_time', 'time_source', 'summary', 'action_items', 'decisions', 'topics', 'data_source', 'synced_at'],
   };
 
   const result = await client.search({ index: INDEX, body });

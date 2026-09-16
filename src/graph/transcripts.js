@@ -3,36 +3,31 @@ import { getCurrentUserId } from './auth.js';
 import { parseVtt } from '../utils/vttParser.js';
 
 /**
- * List available transcripts for a meeting.
+ * List every transcript recorded under an online meeting.
  *
- * A recurring series accumulates one transcript per occurrence under a single
- * onlineMeetingId, and Graph returns only the first page by default (20). On a
- * daily standup that is roughly four weeks of history, so an unpaged list can
- * omit the very occurrence being matched. `notOlderThan` bounds the page walk
- * to the window the caller actually needs.
+ * A recurring series accumulates one transcript per call session under a single
+ * onlineMeetingId, and a session that is stopped and restarted adds another.
+ * Graph orders this collection by transcript id, NOT by date, so the page walk
+ * cannot stop early on a date heuristic and callers must not assume any date
+ * ordering of the result.
+ *
+ * Resolves to `{ found, transcripts }`. `found: false` means Graph positively
+ * reported the meeting as gone — past its retention window the onlineMeeting
+ * object itself 404s. Any other failure throws, so a caller never mistakes a
+ * transient error for an empty history.
  */
-export async function listTranscripts(onlineMeetingId, { notOlderThan } = {}) {
+export async function listTranscripts(onlineMeetingId) {
   const userId = getCurrentUserId();
-  const floorMs = notOlderThan ? new Date(notOlderThan).getTime() : null;
 
   try {
-    return await graphGetAll(
+    const transcripts = await graphGetAll(
       `/v1.0/users/${userId}/onlineMeetings/${onlineMeetingId}/transcripts`,
       { $top: '50' },
-      {
-        // Transcripts come back newest-first, so keep paging only while the
-        // oldest one seen is still newer than the caller's floor.
-        shouldContinue:
-          floorMs === null
-            ? () => false
-            : (items) => {
-                const oldest = items[items.length - 1]?.createdDateTime;
-                return oldest ? new Date(oldest).getTime() > floorMs : false;
-              },
-      }
+      { maxPages: 20 }
     );
+    return { found: true, transcripts };
   } catch (err) {
-    if (err.message?.includes('404')) return [];
+    if (err.statusCode === 404) return { found: false, transcripts: [] };
     throw err;
   }
 }
@@ -65,50 +60,4 @@ export async function fetchTranscript(onlineMeetingId, transcriptId) {
     console.log(JSON.stringify({ level: 'warn', msg: `Failed to fetch transcript ${transcriptId}`, error: err.message }));
     return null;
   }
-}
-
-/**
- * Fetch the first available transcript for a meeting.
- */
-export async function fetchFirstTranscript(onlineMeetingId) {
-  const transcripts = await listTranscripts(onlineMeetingId);
-  if (transcripts.length === 0) return null;
-  return fetchTranscript(onlineMeetingId, transcripts[0].id);
-}
-
-/**
- * Find and fetch the transcript that falls within a specific time window.
- * For recurring meetings, multiple transcripts exist under the same onlineMeetingId;
- * this matches the correct one by comparing createdDateTime to the event window.
- *
- * Always requires the transcript's createdDateTime to fall inside the occurrence
- * window (plus buffer). We deliberately do NOT special-case a single available
- * transcript: a recurring series often has just one transcript early on (or before
- * the current occurrence has been transcribed), and returning it unconditionally
- * would attach an unrelated occurrence's transcript to this one. Returning null
- * instead lets a later sync pick up the correct transcript once it exists.
- */
-export async function fetchTranscriptForTimeWindow(onlineMeetingId, eventStart, eventEnd) {
-  const windowStart = new Date(eventStart);
-  const windowEnd = new Date(eventEnd);
-  // Allow a 1-hour buffer before/after the event to account for early joins or late transcription
-  const bufferMs = 60 * 60 * 1000;
-  const rangeStart = new Date(windowStart.getTime() - bufferMs);
-  const rangeEnd = new Date(windowEnd.getTime() + bufferMs);
-
-  // Page back far enough to reach this occurrence, no further.
-  const transcripts = await listTranscripts(onlineMeetingId, { notOlderThan: rangeStart });
-  if (transcripts.length === 0) return null;
-
-  const match = transcripts.find((t) => {
-    const created = new Date(t.createdDateTime);
-    return created >= rangeStart && created <= rangeEnd;
-  });
-
-  if (match) {
-    return fetchTranscript(onlineMeetingId, match.id);
-  }
-
-  // No time-window match — skip rather than return an unrelated transcript
-  return null;
 }

@@ -1,11 +1,13 @@
 import config from '../config.js';
 import { discoverMeetings, getOnlineMeetingByJoinUrl, extractAttendees } from '../graph/meetings.js';
 import { fetchAiInsights } from '../graph/insights.js';
-import { fetchTranscriptForTimeWindow } from '../graph/transcripts.js';
+import { listTranscripts, fetchTranscript } from '../graph/transcripts.js';
 import { restoreAuthenticatedUser } from '../graph/auth.js';
 import { indexMeeting, meetingExists, getLastSyncTimestamp, saveLastSyncTimestamp } from '../elasticsearch.js';
-import { durationMinutes, now } from '../utils/timestamps.js';
+import { sessionTimes, buildMeetingDoc } from '../meetingDoc.js';
 import { resolveLookbackDays, computeWatermark } from './syncWindow.js';
+import { buildSessionId } from './sessionId.js';
+import { transcriptsInWindow } from './transcriptWindow.js';
 
 // Track sync state
 let syncInProgress = false;
@@ -20,16 +22,6 @@ export async function getSyncStatus() {
     lastSyncError,
     meetingsIndexed,
   };
-}
-
-/**
- * Build a deterministic document ID for a meeting instance.
- * Combines the online meeting ID with the event start date so each
- * occurrence of a recurring meeting gets its own document.
- */
-function buildInstanceId(onlineMeetingId, eventStartIso) {
-  const dateTag = eventStartIso ? eventStartIso.slice(0, 10) : 'unknown';
-  return `${onlineMeetingId}_${dateTag}`;
 }
 
 export async function runSync(lookbackDays) {
@@ -81,6 +73,10 @@ export async function runSync(lookbackDays) {
   // Cache online meeting lookups by joinWebUrl to avoid redundant API calls
   // for recurring meetings that share the same join link.
   const onlineMeetingCache = new Map();
+  // Transcript listings keyed by onlineMeetingId, shared across every
+  // occurrence of a series discovered in this run.
+  const transcriptCache = new Map();
+  const wantsTranscripts = dataTier === 'transcripts' || dataTier === 'both';
 
   try {
     const events = await discoverMeetings(effectiveDays);
@@ -123,83 +119,110 @@ export async function runSync(lookbackDays) {
 
         const onlineMeetingId = onlineMeeting.id;
         const eventEnd = event.end?.dateTime ? new Date(event.end.dateTime + 'Z').toISOString() : null;
-        const instanceId = buildInstanceId(onlineMeetingId, eventStart);
 
-        // Check if this specific instance is already indexed
-        if (await meetingExists(instanceId)) {
-          skipped++;
-          continue;
+        // One list call per online meeting, not per occurrence: every
+        // occurrence of a recurring series resolves to the same
+        // onlineMeetingId and returns the same collection.
+        let allTranscripts = transcriptCache.get(onlineMeetingId);
+        if (allTranscripts === undefined) {
+          allTranscripts = wantsTranscripts ? (await listTranscripts(onlineMeetingId)).transcripts : [];
+          transcriptCache.set(onlineMeetingId, allTranscripts);
         }
 
-        // Build the meeting document
-        const doc = {
-          meeting_id: instanceId,
-          calendar_event_id: event.id,
-          online_meeting_id: onlineMeetingId,
-          title: event.subject || 'Untitled Meeting',
-          organizer: event.organizer?.emailAddress?.address?.toLowerCase() || '',
-          attendees: extractAttendees(event),
-          start_time: eventStart,
-          end_time: eventEnd,
-          duration_minutes: 0,
-          summary: null,
-          meeting_notes: [],
-          action_items: [],
-          decisions: [],
-          topics: [],
-          transcript_text: null,
-          data_source: dataTier,
-          synced_at: now(),
-          raw_graph_response: {},
-        };
+        const sessions = transcriptsInWindow(allTranscripts, eventStart, eventEnd);
 
-        if (doc.start_time && doc.end_time) {
-          doc.duration_minutes = durationMinutes(doc.start_time, doc.end_time);
-        }
+        // With no transcript the occurrence still gets one document, keyed on
+        // its scheduled start, so an insights-only tier is not dropped.
+        const sessionList = sessions.length > 0 ? sessions : [null];
+        let captured = 0;
 
-        // Fetch data based on configured tier
-        if (dataTier === 'insights' || dataTier === 'both') {
-          try {
-            const insights = await fetchAiInsights(onlineMeetingId);
-            if (insights) {
-              doc.summary = insights.summary;
-              doc.meeting_notes = insights.meetingNotes;
-              doc.action_items = insights.actionItems;
-              doc.decisions = insights.decisions;
-              doc.topics = insights.topics;
-              doc.raw_graph_response.insights = insights.raw;
-              if (dataTier === 'insights') doc.data_source = 'ai_insights';
+        for (const [sessionIndex, transcriptMeta] of sessionList.entries()) {
+          const times = sessionTimes({
+            transcript: transcriptMeta,
+            scheduledStart: eventStart,
+            scheduledEnd: eventEnd,
+          });
+          const sessionId = buildSessionId(onlineMeetingId, times.start_time || eventStart);
+
+          // Existence is checked per session rather than per occurrence, so a
+          // second session transcribed after an earlier sync ran is still
+          // picked up by a later run.
+          if (await meetingExists(sessionId)) {
+            captured++;
+            skipped++;
+            continue;
+          }
+
+          const doc = buildMeetingDoc({
+            meetingId: sessionId,
+            calendarEventId: event.id,
+            onlineMeetingId,
+            title: event.subject,
+            organizer: event.organizer?.emailAddress?.address || '',
+            attendees: extractAttendees(event),
+            times,
+            dataSource: dataTier,
+          });
+
+          // Graph exposes aiInsights per online meeting, not per call session,
+          // so they attach to the occurrence's first session only. Copying them
+          // onto every session would duplicate the same action items across
+          // documents.
+          if ((dataTier === 'insights' || dataTier === 'both') && sessionIndex === 0) {
+            try {
+              const insights = await fetchAiInsights(onlineMeetingId);
+              if (insights) {
+                doc.summary = insights.summary;
+                doc.meeting_notes = insights.meetingNotes;
+                doc.action_items = insights.actionItems;
+                doc.decisions = insights.decisions;
+                doc.topics = insights.topics;
+                doc.raw_graph_response.insights = insights.raw;
+                if (dataTier === 'insights') doc.data_source = 'ai_insights';
+              }
+            } catch (err) {
+              console.log(JSON.stringify({ level: 'warn', msg: `AI insights unavailable for "${event.subject}"`, error: err.message }));
             }
-          } catch (err) {
-            console.log(JSON.stringify({ level: 'warn', msg: `AI insights unavailable for "${event.subject}"`, error: err.message }));
+          }
+
+          if (transcriptMeta) {
+            try {
+              const transcript = await fetchTranscript(onlineMeetingId, transcriptMeta.id);
+              if (transcript) {
+                doc.transcript_text = transcript.full_text;
+
+                if (dataTier === 'transcripts') doc.data_source = 'transcript';
+                if (dataTier === 'both' && doc.summary) doc.data_source = 'both';
+              }
+            } catch (err) {
+              console.log(JSON.stringify({ level: 'warn', msg: `Transcript unavailable for "${event.subject}"`, error: err.message }));
+            }
+          }
+
+          // Only index if we got some useful data
+          if (doc.summary || doc.transcript_text || doc.action_items.length > 0) {
+            await indexMeeting(doc);
+            captured++;
+            synced++;
+            meetingsIndexed++;
+            console.log(JSON.stringify({
+              level: 'info',
+              msg: `Indexed session "${doc.title}" (${doc.start_time})`,
+              sessionId,
+              sessionIndex,
+              sessionsInOccurrence: sessionList.length,
+            }));
+          } else {
+            console.log(JSON.stringify({ level: 'info', msg: `No data available for "${event.subject}" (${doc.start_time}), skipping index` }));
+            skipped++;
           }
         }
 
-        if (dataTier === 'transcripts' || dataTier === 'both') {
-          try {
-            const transcript = await fetchTranscriptForTimeWindow(onlineMeetingId, eventStart, eventEnd);
-            if (transcript) {
-              doc.transcript_text = transcript.full_text;
-
-              if (dataTier === 'transcripts') doc.data_source = 'transcript';
-              if (dataTier === 'both' && doc.summary) doc.data_source = 'both';
-            }
-          } catch (err) {
-            console.log(JSON.stringify({ level: 'warn', msg: `Transcript unavailable for "${event.subject}"`, error: err.message }));
-          }
-        }
-
-        // Only index if we got some useful data
-        if (doc.summary || doc.transcript_text || doc.action_items.length > 0) {
-          await indexMeeting(doc);
-          synced++;
-          meetingsIndexed++;
-          console.log(JSON.stringify({ level: 'info', msg: `Indexed meeting "${doc.title}" (${eventStart})`, instanceId }));
-        } else {
-          console.log(JSON.stringify({ level: 'info', msg: `No data available for "${event.subject}" (${eventStart}), skipping index` }));
-          markUncaptured();
-          skipped++;
-        }
+        // The watermark only holds back occurrences that produced nothing at
+        // all. A session that has not been transcribed yet is indistinguishable
+        // from one that will never exist, so a captured occurrence is treated
+        // as done and later sessions are picked up by the lookback overlap.
+        if (captured === 0) markUncaptured();
       } catch (err) {
         errors++;
         markUncaptured();
