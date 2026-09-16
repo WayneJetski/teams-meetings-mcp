@@ -225,6 +225,19 @@ src/
     └── timestamps.js         # Date helpers
 ```
 
+## Tests & CI
+
+Run the suite locally:
+
+```bash
+npm test          # node --test, no Docker or credentials needed
+```
+
+Every push to `main` and every pull request targeting it runs the same suite on
+Node 20 and 22 via `.github/workflows/ci.yml`. To gate merges on it, add a branch
+protection rule for `main` requiring the `Tests (Node 20)` and `Tests (Node 22)`
+status checks to pass.
+
 ## Teardown
 
 ```bash
