@@ -128,6 +128,8 @@ Set `GRAPH_DATA_TIER` in `.env` to control what gets synced:
 | `GRAPH_DATA_TIER` | No | `transcripts` | `transcripts`, `insights`, or `both` |
 | `SYNC_CRON` | No | `0 * * * *` | Cron schedule for auto-sync (default: hourly) |
 | `SYNC_LOOKBACK_DAYS` | No | `30` | Maximum window a sync will look back over |
+| `ES_MAX_RETRIES` | No | `5` | Elasticsearch client retry attempts per request |
+| `ES_REQUEST_TIMEOUT_MS` | No | `30000` | Elasticsearch client per-request timeout (ms) |
 
 ### How the sync window moves
 
@@ -199,7 +201,8 @@ curl -X PUT -u elastic:$ES_SECRET http://127.0.0.1:9200/meetings/_settings \
 
 ```
 src/
-├── index.js                  # Express + MCP + cron startup
+├── index.js                  # Process startup (listen, migrations, scheduler)
+├── app.js                    # Express app assembly + route protection boundary
 ├── config.js                 # Environment variable loading
 ├── elasticsearch.js          # ES client, index mappings, queries
 ├── public/index.html         # Web dashboard (sign-in UI)
@@ -232,6 +235,12 @@ Run the suite locally:
 ```bash
 npm test          # node --test, no Docker or credentials needed
 ```
+
+`test/routes.test.js` boots the app on an ephemeral port and asserts what an
+unauthenticated caller can reach: `/health`, `/mcp` and the OAuth discovery
+endpoints stay public, and every API route, the dashboard and unknown paths do
+not. It needs no Elasticsearch — `/health` is asserted only to be ungated, not
+to be green.
 
 Every push to `main` and every pull request targeting it runs the same suite on
 Node 20 and 22 via `.github/workflows/ci.yml`. To gate merges on it, add a branch

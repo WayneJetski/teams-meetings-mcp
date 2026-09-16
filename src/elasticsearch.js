@@ -8,6 +8,8 @@ const client = new Client(
     url: config.elasticsearch.url,
     username: config.elasticsearch.username,
     password: config.elasticsearch.password,
+    maxRetries: config.elasticsearch.maxRetries,
+    requestTimeout: config.elasticsearch.requestTimeout,
   })
 );
 const INDEX = config.elasticsearch.index;
