@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { indexMeeting, listMeetings, getMeeting, searchMeetings, meetingStats, deduplicateMeetings } from '../elasticsearch.js';
+import { buildMeetingDoc, manualTimes } from '../meetingDoc.js';
 import { runSync, getSyncStatus } from '../sync/engine.js';
 
 const router = Router();
@@ -30,24 +31,25 @@ router.post('/ingest', async (req, res) => {
       continue;
     }
     try {
-      await indexMeeting({
-        meeting_id: meeting.meeting_id,
-        title: meeting.title || 'Untitled',
+      await indexMeeting(buildMeetingDoc({
+        meetingId: meeting.meeting_id,
+        onlineMeetingId: meeting.online_meeting_id || null,
+        title: meeting.title,
         organizer: meeting.organizer || '',
         attendees: meeting.attendees || [],
-        start_time: meeting.start_time || null,
-        end_time: meeting.end_time || null,
-        duration_minutes: meeting.duration_minutes || 0,
+        times: manualTimes({
+          start: meeting.start_time || null,
+          end: meeting.end_time || null,
+          duration: meeting.duration_minutes ?? null,
+        }),
         summary: meeting.summary || null,
-        meeting_notes: meeting.meeting_notes || [],
-        action_items: meeting.action_items || [],
+        meetingNotes: meeting.meeting_notes || [],
+        actionItems: meeting.action_items || [],
         decisions: meeting.decisions || [],
         topics: meeting.topics || [],
-        transcript_text: meeting.transcript_text || null,
-        data_source: meeting.data_source || 'manual',
-        synced_at: new Date().toISOString(),
-        raw_graph_response: {},
-      });
+        transcriptText: meeting.transcript_text || null,
+        dataSource: meeting.data_source || 'manual',
+      }));
       results.push({ meeting_id: meeting.meeting_id, status: 'indexed' });
     } catch (err) {
       results.push({ meeting_id: meeting.meeting_id, error: err.message });

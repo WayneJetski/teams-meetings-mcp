@@ -4,6 +4,7 @@ import express from 'express';
 import session from 'express-session';
 import config from './config.js';
 import { ensureIndex, healthCheck } from './elasticsearch.js';
+import { runPendingMigrations } from './sync/migrations.js';
 import { handleStreamableHttp } from './mcp/server.js';
 import { startScheduler } from './sync/scheduler.js';
 import { runSync } from './sync/engine.js';
@@ -86,6 +87,12 @@ async function start() {
       dataTier: config.graph.dataTier,
     }));
   });
+
+  // Before any sync: a pending migration and a sync both write meeting
+  // documents, and the migration deletes the keys the old data sits under.
+  // Listening starts first so the dashboard is reachable for sign-in even while
+  // this runs.
+  await runPendingMigrations();
 
   // Start the sync scheduler (runs only when a cached token is available)
   startScheduler();

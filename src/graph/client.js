@@ -21,7 +21,11 @@ async function graphFetch(url, options = {}) {
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Graph API ${res.status}: ${body}`);
+    const err = new Error(`Graph API ${res.status}: ${body}`);
+    // Callers must distinguish "Graph says this is gone" from "the call
+    // failed", because the two warrant opposite recovery behaviour.
+    err.statusCode = res.status;
+    throw err;
   }
 
   return res;
