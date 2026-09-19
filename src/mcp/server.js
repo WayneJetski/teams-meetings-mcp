@@ -8,8 +8,10 @@ import * as getMeetingTool from './tools/getMeeting.js';
 import * as getActionItems from './tools/getActionItems.js';
 import * as getDecisions from './tools/getDecisions.js';
 import * as meetingStatsTool from './tools/meetingStats.js';
+import * as exportMeetingTool from './tools/exportMeeting.js';
+import * as importMeetingTool from './tools/importMeeting.js';
 
-const tools = [searchMeetings, getMeetingTool, getActionItems, getDecisions, meetingStatsTool];
+const tools = [searchMeetings, getMeetingTool, getActionItems, getDecisions, meetingStatsTool, exportMeetingTool, importMeetingTool];
 
 export function createMcpServer() {
   const server = new McpServer({

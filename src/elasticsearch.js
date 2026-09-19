@@ -57,6 +57,7 @@ const MEETINGS_MAPPING = {
     data_source: { type: 'keyword' },
     synced_at: { type: 'date' },
     raw_graph_response: { type: 'object', enabled: false },
+    graph_accessible: { type: 'boolean' },
 
     // Lives on the sync-metadata document, not on meetings. Declared so it is
     // not left to dynamic mapping. doc_type and last_successful_sync are
@@ -64,6 +65,13 @@ const MEETINGS_MAPPING = {
     // dynamically, and redeclaring doc_type as a keyword would conflict.
     schema_version: { type: 'integer' },
     migration_attempts: { type: 'integer' },
+
+    // When the sync engine last actually ran, and a summary of that run —
+    // distinct from `last_successful_sync`, which is a retry watermark that
+    // can sit far in the past while runs are succeeding (see computeWatermark
+    // in sync/syncWindow.js). A small diagnostic blob, not queried, so it's
+    // left unindexed like raw_graph_response.
+    last_run: { type: 'object', enabled: false },
   },
 };
 
@@ -192,6 +200,26 @@ export async function saveLastSyncTimestamp(isoTimestamp) {
 }
 
 /**
+ * The most recent sync attempt's wall-clock time and outcome, regardless of
+ * whether it moved the retry watermark. This is what "did sync just run?"
+ * should be answered from — `last_successful_sync` is a retry floor, not a
+ * run history.
+ */
+export async function getLastRunInfo() {
+  try {
+    const result = await client.get({ index: INDEX, id: SYNC_META_ID });
+    return result._source?.last_run || null;
+  } catch (err) {
+    if (err.meta?.statusCode === 404) return null;
+    throw err;
+  }
+}
+
+export async function saveLastRunInfo(info) {
+  await updateSyncMetadata({ last_run: info });
+}
+
+/**
  * Schema version of the indexed data, used to run a migration exactly once per
  * install. Absent on an index written before versioning began.
  */
@@ -304,6 +332,52 @@ export async function getMeeting(meetingId, includeTranscript = false) {
     if (err.meta?.statusCode === 404) return null;
     throw err;
   }
+}
+
+/**
+ * A meeting document suitable for export/import round-trip: always the full
+ * transcript (unlike `getMeeting`'s default), never Graph's raw response
+ * (install-specific and not needed to reconstruct the document).
+ */
+export async function getMeetingForExport(meetingId) {
+  try {
+    const result = await client.get({ index: INDEX, id: meetingId });
+    const doc = { ...result._source };
+    delete doc.raw_graph_response;
+    return doc;
+  } catch (err) {
+    if (err.meta?.statusCode === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * Where a session sits among the other sessions of the same booking (same
+ * online meeting, same scheduled start), oldest first. `{ index: 1, total: 1
+ * }` when there's nothing to group by or nothing else shares the booking, so
+ * callers can treat that as "no sibling sessions" without a separate check.
+ */
+export async function findSessionPosition(onlineMeetingId, scheduledStartTime, meetingId) {
+  if (!onlineMeetingId || !scheduledStartTime) return { index: 1, total: 1 };
+
+  const result = await client.search({
+    index: INDEX,
+    size: 50,
+    sort: [{ start_time: 'asc' }],
+    query: {
+      bool: {
+        filter: [
+          { term: { online_meeting_id: onlineMeetingId } },
+          { term: { scheduled_start_time: scheduledStartTime } },
+        ],
+      },
+    },
+    _source: false,
+  });
+
+  const ids = result.hits.hits.map((hit) => hit._id);
+  const index = ids.indexOf(meetingId);
+  return { index: index === -1 ? 1 : index + 1, total: ids.length || 1 };
 }
 
 export async function getActionItems({ owner, dateFrom, dateTo, limit = 20 }) {
@@ -437,7 +511,7 @@ export async function listMeetings({ limit = 20, offset = 0 } = {}) {
     size: limit,
     sort: [{ start_time: 'desc' }],
     query: { bool: { must_not: [{ term: { doc_type: 'sync_metadata' } }] } },
-    _source: ['meeting_id', 'online_meeting_id', 'call_id', 'title', 'organizer', 'attendees', 'start_time', 'end_time', 'duration_minutes', 'scheduled_start_time', 'scheduled_end_time', 'time_source', 'summary', 'action_items', 'decisions', 'topics', 'data_source', 'synced_at'],
+    _source: ['meeting_id', 'online_meeting_id', 'call_id', 'title', 'organizer', 'attendees', 'start_time', 'end_time', 'duration_minutes', 'scheduled_start_time', 'scheduled_end_time', 'time_source', 'summary', 'action_items', 'decisions', 'topics', 'data_source', 'synced_at', 'graph_accessible'],
   };
 
   const result = await client.search({ index: INDEX, body });

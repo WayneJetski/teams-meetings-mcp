@@ -1,7 +1,9 @@
 import { Router } from 'express';
-import { indexMeeting, listMeetings, getMeeting, searchMeetings, meetingStats, deduplicateMeetings } from '../elasticsearch.js';
+import { indexMeeting, listMeetings, getMeeting, searchMeetings, meetingStats, deduplicateMeetings, saveLastSyncTimestamp } from '../elasticsearch.js';
 import { buildMeetingDoc, manualTimes } from '../meetingDoc.js';
 import { runSync, getSyncStatus } from '../sync/engine.js';
+import { exportMeetings, importMeetings } from '../exportImport.js';
+import { now } from '../utils/timestamps.js';
 
 const router = Router();
 
@@ -19,6 +21,19 @@ router.post('/sync', async (req, res) => {
 
 router.get('/sync/status', async (req, res) => {
   res.json(await getSyncStatus());
+});
+
+// Manual override for a watermark stuck behind a real, since-resolved outage
+// (see classifyUncaptured in sync/syncWindow.js) — drops whatever backlog it
+// was holding and starts the next incremental sync fresh from now.
+router.post('/sync/reset-watermark', async (req, res) => {
+  try {
+    const lastSync = now();
+    await saveLastSyncTimestamp(lastSync);
+    res.json({ status: 'ok', lastSync });
+  } catch (err) {
+    res.status(500).json({ status: 'error', error: err.message });
+  }
 });
 
 router.post('/ingest', async (req, res) => {
@@ -78,6 +93,31 @@ router.get('/api/meetings/:id', async (req, res) => {
     res.json(meeting);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/meetings/:id/export', async (req, res) => {
+  try {
+    const envelope = await exportMeetings([req.params.id], {
+      exportedBy: req.session?.user?.email || null,
+      timeZone: req.query.tz,
+    });
+    if (!envelope.meetings.length) return res.status(404).json({ error: 'Meeting not found' });
+    const filename = envelope.meetings[0].export_filename || `${req.params.id}.json`;
+    const asciiFallback = filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, "'");
+    res.setHeader('Content-Disposition', `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.json(envelope);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/meetings/import', async (req, res) => {
+  try {
+    const result = await importMeetings(req.body);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 

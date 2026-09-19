@@ -81,6 +81,7 @@ export function buildMeetingDoc({
   dataSource,
   syncedAt = null,
   rawGraphResponse = {},
+  graphAccessible = true,
 }) {
   return {
     meeting_id: meetingId || buildSessionId(onlineMeetingId, times.start_time),
@@ -99,5 +100,10 @@ export function buildMeetingDoc({
     data_source: dataSource,
     synced_at: syncedAt || now(),
     raw_graph_response: rawGraphResponse,
+    // False only for a document imported from someone else's export — Graph
+    // never granted this install access to it directly (that's the whole
+    // reason it had to be imported), so a future rebuild-from-Graph workload
+    // must not expect to be able to re-fetch or re-verify it.
+    graph_accessible: graphAccessible,
   };
 }

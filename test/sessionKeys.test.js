@@ -176,6 +176,25 @@ test('a caller-supplied id is preserved', () => {
   assert.equal(doc.meeting_id, 'manual-1');
 });
 
+test('a document defaults to graph-accessible unless told otherwise', () => {
+  const synced = buildMeetingDoc({
+    meetingId: 'manual-1',
+    title: 'Hand-written note',
+    times: manualTimes({ start: SCHEDULED_START, end: SCHEDULED_END }),
+    dataSource: 'manual',
+  });
+  const imported = buildMeetingDoc({
+    meetingId: 'manual-2',
+    title: 'Shared from a colleague',
+    times: manualTimes({ start: SCHEDULED_START, end: SCHEDULED_END }),
+    dataSource: 'manual',
+    graphAccessible: false,
+  });
+
+  assert.equal(synced.graph_accessible, true);
+  assert.equal(imported.graph_accessible, false);
+});
+
 test('an untitled document still gets a title, and organizers are normalised', () => {
   const doc = buildMeetingDoc({
     meetingId: 'manual-2',

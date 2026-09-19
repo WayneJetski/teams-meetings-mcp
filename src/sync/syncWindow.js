@@ -61,3 +61,47 @@ export function computeWatermark({ oldestUncapturedStart, nowMs, maxLookbackDays
   const floorMs = nowMs - maxLookbackDays * MS_PER_DAY;
   return new Date(Math.min(nowMs, Math.max(uncapturedMs, floorMs))).toISOString();
 }
+
+/** Whether an occurrence with no data is still worth retrying, based on its own age. */
+export function withinRetryWindow({ eventStart, nowMs, giveUpDays }) {
+  if (!eventStart) return true;
+
+  const ageMs = nowMs - new Date(eventStart).getTime();
+  if (Number.isNaN(ageMs)) return true;
+
+  return ageMs <= giveUpDays * MS_PER_DAY;
+}
+
+/**
+ * Decide which of this run's uncaptured occurrences should still hold the
+ * watermark back, and compute the resulting oldest-uncaptured timestamp.
+ *
+ * Two failure shapes look identical per-occurrence (an occurrence produced
+ * nothing) but need opposite handling:
+ *
+ *  - An isolated dead occurrence (a no-show, a meeting series that stopped
+ *    happening) will never produce data no matter how long it's retried.
+ *    Past `giveUpDays` old, it's dropped from the set holding the watermark
+ *    back, so a permanently-dead recurring meeting can't pin "last sync"
+ *    in the past forever.
+ *  - Every occurrence in the run failing is a systemic outage (Graph
+ *    rejecting every fetch, an expired scope, a Teams-side incident) — see
+ *    the regression test in syncWindow.test.js for the incident this
+ *    protects against. There every occurrence holds the watermark back
+ *    regardless of age, since advancing during an outage loses the affected
+ *    days for good once the incremental window moves past them.
+ */
+export function classifyUncaptured({ uncapturedStarts, totalEvents, nowMs, giveUpDays }) {
+  const isOutage = totalEvents > 0 && uncapturedStarts.length === totalEvents;
+
+  const retained = isOutage
+    ? uncapturedStarts
+    : uncapturedStarts.filter((eventStart) => withinRetryWindow({ eventStart, nowMs, giveUpDays }));
+
+  let oldestUncapturedStart = null;
+  for (const start of retained) {
+    if (start && (!oldestUncapturedStart || start < oldestUncapturedStart)) oldestUncapturedStart = start;
+  }
+
+  return { oldestUncapturedStart, abandoned: uncapturedStarts.length - retained.length, isOutage };
+}

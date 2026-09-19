@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 // Dependency-free: syncWindow imports nothing, so this runs under `npm test`
 // without installing node_modules (matching the repo's test style).
-import { resolveLookbackDays, computeWatermark } from '../src/sync/syncWindow.js';
+import { resolveLookbackDays, computeWatermark, withinRetryWindow, classifyUncaptured } from '../src/sync/syncWindow.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.parse('2026-08-11T12:00:00.000Z');
@@ -149,4 +149,78 @@ test('regression: a systemic transcript failure no longer walks the window past 
 
   // After the fallback ships, the first run still covers the whole outage.
   assert.equal(watermark, new Date(outageStart).toISOString());
+});
+
+// ── withinRetryWindow ────────────────────────────────────────────────
+
+test('an occurrence younger than the give-up threshold is still retried', () => {
+  assert.equal(withinRetryWindow({ eventStart: daysBefore(2), nowMs: NOW, giveUpDays: 3 }), true);
+});
+
+test('an occurrence older than the give-up threshold is not', () => {
+  assert.equal(withinRetryWindow({ eventStart: daysBefore(4), nowMs: NOW, giveUpDays: 3 }), false);
+});
+
+test('a missing or unparseable event start errs toward retrying', () => {
+  assert.equal(withinRetryWindow({ eventStart: null, nowMs: NOW, giveUpDays: 3 }), true);
+  assert.equal(withinRetryWindow({ eventStart: 'not-a-date', nowMs: NOW, giveUpDays: 3 }), true);
+});
+
+// ── classifyUncaptured ───────────────────────────────────────────────
+
+test('an isolated dead occurrence is given up on once past the threshold', () => {
+  const { oldestUncapturedStart, abandoned, isOutage } = classifyUncaptured({
+    uncapturedStarts: [daysBefore(30)], // a long-dead recurring meeting
+    totalEvents: 115, // everything else in the run succeeded
+    nowMs: NOW,
+    giveUpDays: 3,
+  });
+
+  assert.equal(isOutage, false);
+  assert.equal(abandoned, 1);
+  assert.equal(oldestUncapturedStart, null, 'nothing left to hold the watermark back');
+});
+
+test('a recent isolated failure still holds the watermark', () => {
+  const recent = daysBefore(1);
+  const { oldestUncapturedStart, abandoned, isOutage } = classifyUncaptured({
+    uncapturedStarts: [recent],
+    totalEvents: 115,
+    nowMs: NOW,
+    giveUpDays: 3,
+  });
+
+  assert.equal(isOutage, false);
+  assert.equal(abandoned, 0);
+  assert.equal(oldestUncapturedStart, recent);
+});
+
+test('every occurrence failing is treated as an outage regardless of age', () => {
+  // Reproduces the Jul 30 - Aug 9 incident: every occurrence failed for 11
+  // days straight. A flat give-up threshold would have written off the early
+  // days of the outage before it was fixed; the outage check must override it.
+  const ancient = daysBefore(30);
+  const { oldestUncapturedStart, abandoned, isOutage } = classifyUncaptured({
+    uncapturedStarts: [ancient, daysBefore(1)],
+    totalEvents: 2, // every discovered occurrence failed
+    nowMs: NOW,
+    giveUpDays: 3,
+  });
+
+  assert.equal(isOutage, true);
+  assert.equal(abandoned, 0, 'an outage abandons nothing, however old');
+  assert.equal(oldestUncapturedStart, ancient);
+});
+
+test('a clean run with nothing uncaptured is not mistaken for an outage', () => {
+  const { isOutage, abandoned, oldestUncapturedStart } = classifyUncaptured({
+    uncapturedStarts: [],
+    totalEvents: 115,
+    nowMs: NOW,
+    giveUpDays: 3,
+  });
+
+  assert.equal(isOutage, false);
+  assert.equal(abandoned, 0);
+  assert.equal(oldestUncapturedStart, null);
 });

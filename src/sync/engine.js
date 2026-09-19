@@ -3,11 +3,12 @@ import { discoverMeetings, getOnlineMeetingByJoinUrl, extractAttendees } from '.
 import { fetchAiInsights } from '../graph/insights.js';
 import { listTranscripts, fetchTranscript } from '../graph/transcripts.js';
 import { restoreAuthenticatedUser } from '../graph/auth.js';
-import { indexMeeting, meetingExists, getLastSyncTimestamp, saveLastSyncTimestamp, getWriteBlocks } from '../elasticsearch.js';
+import { indexMeeting, meetingExists, getLastSyncTimestamp, saveLastSyncTimestamp, getLastRunInfo, saveLastRunInfo, getWriteBlocks } from '../elasticsearch.js';
 import { sessionTimes, buildMeetingDoc } from '../meetingDoc.js';
-import { resolveLookbackDays, computeWatermark } from './syncWindow.js';
+import { resolveLookbackDays, computeWatermark, classifyUncaptured } from './syncWindow.js';
 import { buildSessionId } from './sessionId.js';
 import { transcriptsInWindow } from './transcriptWindow.js';
+import { now } from '../utils/timestamps.js';
 
 // Track sync state
 let syncInProgress = false;
@@ -16,11 +17,14 @@ let meetingsIndexed = 0;
 
 export async function getSyncStatus() {
   const lastSync = await getLastSyncTimestamp();
+  const lastRun = await getLastRunInfo();
   return {
     lastSync,
+    lastRun,
     syncInProgress,
     lastSyncError,
     meetingsIndexed,
+    giveUpDays: config.sync.giveUpDays,
   };
 }
 
@@ -42,6 +46,7 @@ export async function runSync(lookbackDays) {
     if (writesBlocked) {
       lastSyncError = `Elasticsearch is refusing writes (${blocks.join(', ')})`;
       syncInProgress = false;
+      await saveLastRunInfo({ ranAt: now(), blocked: true, error: lastSyncError });
       console.log(JSON.stringify({
         level: 'error',
         msg: 'Sync aborted — Elasticsearch is refusing writes. Free disk space; Elasticsearch releases a flood-stage block itself once usage drops below the high watermark.',
@@ -83,11 +88,11 @@ export async function runSync(lookbackDays) {
   let skipped = 0;
   let errors = 0;
 
-  // Start time of the oldest occurrence this run could not capture. The
-  // watermark is held back to it so the next run retries instead of stepping
-  // over the gap. See computeWatermark in ./syncWindow.js.
-  let oldestUncapturedStart = null;
-  let uncaptured = 0;
+  // eventStart of every occurrence this run could not capture anything for.
+  // Classified after the loop (see classifyUncaptured in ./syncWindow.js) into
+  // what should still hold the watermark back for retry versus what's been
+  // given a fair chance and won't ever resolve.
+  const uncapturedStarts = [];
 
   // Cache online meeting lookups by joinWebUrl to avoid redundant API calls
   // for recurring meetings that share the same join link.
@@ -104,14 +109,9 @@ export async function runSync(lookbackDays) {
     for (const event of events) {
       const eventStart = event.start?.dateTime ? new Date(event.start.dateTime + 'Z').toISOString() : null;
 
-      // Record an occurrence we could not index, so the watermark stays behind
-      // it. ISO-8601 UTC strings from toISOString() compare correctly with <.
-      const markUncaptured = () => {
-        uncaptured++;
-        if (eventStart && (!oldestUncapturedStart || eventStart < oldestUncapturedStart)) {
-          oldestUncapturedStart = eventStart;
-        }
-      };
+      // Record an occurrence we could not index, for classifyUncaptured to
+      // sort out once the whole run's outcome is known.
+      const markUncaptured = () => uncapturedStarts.push(eventStart);
 
       try {
         const joinWebUrl = event.onlineMeeting?.joinUrl;
@@ -256,6 +256,13 @@ export async function runSync(lookbackDays) {
       }
     }
 
+    const { oldestUncapturedStart, abandoned, isOutage } = classifyUncaptured({
+      uncapturedStarts,
+      totalEvents: events.length,
+      nowMs: Date.now(),
+      giveUpDays: config.sync.giveUpDays,
+    });
+
     const watermark = computeWatermark({
       oldestUncapturedStart,
       nowMs: Date.now(),
@@ -268,19 +275,35 @@ export async function runSync(lookbackDays) {
     const isHeldBack = Boolean(oldestUncapturedStart);
     console.log(JSON.stringify({
       level: isHeldBack ? 'warn' : 'info',
-      msg: isHeldBack
-        ? 'Sync complete with uncaptured occurrences — watermark held back for retry'
-        : 'Sync complete',
+      msg: isOutage
+        ? 'Sync complete — every occurrence failed, treating as an outage and holding the watermark unconditionally'
+        : isHeldBack
+          ? 'Sync complete with uncaptured occurrences — watermark held back for retry'
+          : 'Sync complete',
       synced,
       skipped,
       errors,
-      uncaptured,
+      uncaptured: uncapturedStarts.length,
+      abandoned,
+      isOutage,
       oldestUncapturedStart,
       watermark,
     }));
-    return { synced, skipped, errors, uncaptured, watermark };
+    await saveLastRunInfo({
+      ranAt: now(),
+      synced,
+      skipped,
+      errors,
+      uncaptured: uncapturedStarts.length,
+      abandoned,
+      isOutage,
+      oldestUncapturedStart,
+      watermark,
+    });
+    return { synced, skipped, errors, uncaptured: uncapturedStarts.length, abandoned, isOutage, watermark };
   } catch (err) {
     lastSyncError = err.message;
+    await saveLastRunInfo({ ranAt: now(), failed: true, error: err.message });
     console.log(JSON.stringify({ level: 'error', msg: 'Sync failed', error: err.message }));
     throw err;
   } finally {
