@@ -10,6 +10,14 @@ import { buildSessionId } from './sessionId.js';
 import { transcriptsInWindow } from './transcriptWindow.js';
 import { now } from '../utils/timestamps.js';
 
+/** A short, human-facing reason for a Graph error, for the sync status dashboard. */
+function describeError(err) {
+  const statusCode = err.meta?.statusCode || err.statusCode;
+  if (statusCode === 403) return 'No permission to access this meeting';
+  if (statusCode === 404) return 'Meeting not found (expired or deleted)';
+  return 'Error fetching this meeting';
+}
+
 // Track sync state
 let syncInProgress = false;
 let lastSyncError = null;
@@ -88,11 +96,11 @@ export async function runSync(lookbackDays) {
   let skipped = 0;
   let errors = 0;
 
-  // eventStart of every occurrence this run could not capture anything for.
+  // One entry per occurrence this run could not capture anything for.
   // Classified after the loop (see classifyUncaptured in ./syncWindow.js) into
   // what should still hold the watermark back for retry versus what's been
   // given a fair chance and won't ever resolve.
-  const uncapturedStarts = [];
+  const uncaptured = [];
 
   // Cache online meeting lookups by joinWebUrl to avoid redundant API calls
   // for recurring meetings that share the same join link.
@@ -111,7 +119,7 @@ export async function runSync(lookbackDays) {
 
       // Record an occurrence we could not index, for classifyUncaptured to
       // sort out once the whole run's outcome is known.
-      const markUncaptured = () => uncapturedStarts.push(eventStart);
+      const markUncaptured = (reason) => uncaptured.push({ eventStart, title: event.subject, reason });
 
       try {
         const joinWebUrl = event.onlineMeeting?.joinUrl;
@@ -131,7 +139,7 @@ export async function runSync(lookbackDays) {
 
         if (!onlineMeeting) {
           console.log(JSON.stringify({ level: 'warn', msg: `Could not resolve online meeting for "${event.subject}"` }));
-          markUncaptured();
+          markUncaptured('Could not resolve the online meeting');
           skipped++;
           continue;
         }
@@ -241,10 +249,10 @@ export async function runSync(lookbackDays) {
         // all. A session that has not been transcribed yet is indistinguishable
         // from one that will never exist, so a captured occurrence is treated
         // as done and later sessions are picked up by the lookback overlap.
-        if (captured === 0) markUncaptured();
+        if (captured === 0) markUncaptured('No transcript available');
       } catch (err) {
         errors++;
-        markUncaptured();
+        markUncaptured(describeError(err));
         const errorDetail = err.message || err.body?.error?.reason || err.meta?.body?.error?.reason || String(err);
         console.log(JSON.stringify({
           level: 'error',
@@ -256,8 +264,8 @@ export async function runSync(lookbackDays) {
       }
     }
 
-    const { oldestUncapturedStart, abandoned, isOutage } = classifyUncaptured({
-      uncapturedStarts,
+    const { oldestUncapturedStart, abandoned, isOutage, failures } = classifyUncaptured({
+      uncaptured,
       totalEvents: events.length,
       nowMs: Date.now(),
       giveUpDays: config.sync.giveUpDays,
@@ -283,7 +291,7 @@ export async function runSync(lookbackDays) {
       synced,
       skipped,
       errors,
-      uncaptured: uncapturedStarts.length,
+      uncaptured: uncaptured.length,
       abandoned,
       isOutage,
       oldestUncapturedStart,
@@ -294,13 +302,14 @@ export async function runSync(lookbackDays) {
       synced,
       skipped,
       errors,
-      uncaptured: uncapturedStarts.length,
+      uncaptured: uncaptured.length,
       abandoned,
       isOutage,
       oldestUncapturedStart,
       watermark,
+      failures,
     });
-    return { synced, skipped, errors, uncaptured: uncapturedStarts.length, abandoned, isOutage, watermark };
+    return { synced, skipped, errors, uncaptured: uncaptured.length, abandoned, isOutage, watermark };
   } catch (err) {
     lastSyncError = err.message;
     await saveLastRunInfo({ ranAt: now(), failed: true, error: err.message });

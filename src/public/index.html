@@ -216,6 +216,8 @@
     }
 
     .meeting-card:hover { border-color: var(--accent); }
+    .meeting-card.static { cursor: default; }
+    .meeting-card.static:hover { border-color: var(--border); }
 
     .meeting-card .meeting-header {
       display: flex;
@@ -514,6 +516,10 @@
         </div>
         <button id="manual-sync-btn" onclick="triggerSync()">Trigger Manual Sync</button>
         <button class="secondary" onclick="resetWatermark()">Clear Watermark</button>
+      </div>
+      <div class="sync-panel" id="sync-failures-panel" style="display:none;">
+        <h3>Meetings That Didn't Sync This Run</h3>
+        <div class="meeting-list" id="sync-failures"></div>
       </div>
     </div>
   </div>
@@ -881,9 +887,35 @@
               ${run.oldestUncapturedStart ? `Still retrying back to ${new Date(run.oldestUncapturedStart).toLocaleDateString()}.` : ''}
             </div>
           </div>` : ''}`;
+
+        const failuresPanel = document.getElementById('sync-failures-panel');
+        const failuresEl = document.getElementById('sync-failures');
+        if (run.failures?.length) {
+          failuresPanel.style.display = '';
+          failuresEl.innerHTML = run.failures.map(syncFailureItem).join('');
+        } else {
+          failuresPanel.style.display = 'none';
+        }
       } catch (err) {
         el.innerHTML = `<div class="empty-state">Failed to load sync status</div>`;
       }
+    }
+
+    function syncFailureItem(f) {
+      const date = f.eventStart
+        ? new Date(f.eventStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+        : 'Unknown date';
+      const statusBadge = f.retrying
+        ? `<span class="badge manual">retrying</span>`
+        : `<span class="badge imported">given up</span>`;
+
+      return `<div class="meeting-card static">
+        <div class="meeting-header">
+          <span class="title">${esc(f.title || 'Untitled')}</span>
+          <span class="date">${date}</span>
+        </div>
+        <div class="meta">${esc(f.reason || 'Unknown reason')} &middot; ${statusBadge}</div>
+      </div>`;
     }
 
     async function resetWatermark() {

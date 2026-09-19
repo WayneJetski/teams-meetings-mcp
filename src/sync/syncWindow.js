@@ -91,17 +91,26 @@ export function withinRetryWindow({ eventStart, nowMs, giveUpDays }) {
  *    regardless of age, since advancing during an outage loses the affected
  *    days for good once the incremental window moves past them.
  */
-export function classifyUncaptured({ uncapturedStarts, totalEvents, nowMs, giveUpDays }) {
-  const isOutage = totalEvents > 0 && uncapturedStarts.length === totalEvents;
+export function classifyUncaptured({ uncaptured, totalEvents, nowMs, giveUpDays }) {
+  const isOutage = totalEvents > 0 && uncaptured.length === totalEvents;
 
-  const retained = isOutage
-    ? uncapturedStarts
-    : uncapturedStarts.filter((eventStart) => withinRetryWindow({ eventStart, nowMs, giveUpDays }));
+  const failures = uncaptured.map((failure) => ({
+    ...failure,
+    retrying: isOutage || withinRetryWindow({ eventStart: failure.eventStart, nowMs, giveUpDays }),
+  }));
 
   let oldestUncapturedStart = null;
-  for (const start of retained) {
-    if (start && (!oldestUncapturedStart || start < oldestUncapturedStart)) oldestUncapturedStart = start;
+  for (const failure of failures) {
+    if (!failure.retrying) continue;
+    if (failure.eventStart && (!oldestUncapturedStart || failure.eventStart < oldestUncapturedStart)) {
+      oldestUncapturedStart = failure.eventStart;
+    }
   }
 
-  return { oldestUncapturedStart, abandoned: uncapturedStarts.length - retained.length, isOutage };
+  return {
+    oldestUncapturedStart,
+    abandoned: failures.filter((f) => !f.retrying).length,
+    isOutage,
+    failures,
+  };
 }
