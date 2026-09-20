@@ -128,6 +128,8 @@ Set `GRAPH_DATA_TIER` in `.env` to control what gets synced:
 | `GRAPH_DATA_TIER` | No | `transcripts` | `transcripts`, `insights`, or `both` |
 | `SYNC_CRON` | No | `0 * * * *` | Cron schedule for auto-sync (default: hourly) |
 | `SYNC_LOOKBACK_DAYS` | No | `30` | Maximum window a sync will look back over |
+| `ES_MAX_RETRIES` | No | `5` | Elasticsearch client retry attempts per request |
+| `ES_REQUEST_TIMEOUT_MS` | No | `30000` | Elasticsearch client per-request timeout (ms) |
 
 ### How the sync window moves
 
@@ -199,7 +201,8 @@ curl -X PUT -u elastic:$ES_SECRET http://127.0.0.1:9200/meetings/_settings \
 
 ```
 src/
-├── index.js                  # Express + MCP + cron startup
+├── index.js                  # Process startup (listen, migrations, scheduler)
+├── app.js                    # Express app assembly + route protection boundary
 ├── config.js                 # Environment variable loading
 ├── elasticsearch.js          # ES client, index mappings, queries
 ├── public/index.html         # Web dashboard (sign-in UI)
@@ -233,8 +236,47 @@ Run the suite locally:
 npm test          # node --test, no Docker or credentials needed
 ```
 
-Every push to `main` and every pull request targeting it runs the same suite on
-Node 20 and 22 via `.github/workflows/ci.yml`. To gate merges on it, add a branch
+`test/routes.test.js` boots the app on an ephemeral port and asserts what an
+unauthenticated caller can reach: `/health`, `/mcp` and the OAuth discovery
+endpoints stay public, and every API route, the dashboard and unknown paths do
+not. It needs no Elasticsearch — `/health` is asserted only to be ungated, not
+to be green.
+
+### Integration tests
+
+`test/integration/` runs against a real Elasticsearch, because mappings, nested
+queries and aggregations cannot be verified any other way — a query naming a
+nested field returns zero hits rather than an error. The suite **skips itself**
+when no node is configured, so `npm test` stays offline by default.
+
+To run them locally:
+
+```bash
+npm run test:integration
+```
+
+That starts a throwaway Elasticsearch on `127.0.0.1:19200`, waits for it, runs
+the suite (about 30 seconds), and removes the container again — including when
+the tests fail or you press Ctrl-C. It needs only Docker; the image matches the
+version `docker-compose.yml` runs, and the password is generated per run.
+
+Pass a port to avoid a collision: `npm run test:integration -- 19500`.
+
+To use an Elasticsearch you already have instead, set `ELASTICSEARCH_URL` and no
+container is started or stopped:
+
+```bash
+ELASTICSEARCH_URL=http://localhost:9200 ELASTICSEARCH_PASSWORD=... \
+  npm run test:integration
+```
+
+Each run indexes into its own `meetings-itest-*` index and deletes it afterwards,
+so it never touches a real one, and the real `meetings-es` container is never
+started, stopped or read.
+
+Every push to `main` and every pull request targeting it runs the unit suite on
+Node 20 and 22 via `.github/workflows/ci.yml`, then the integration suite against
+an Elasticsearch service container. To gate merges on it, add a branch
 protection rule for `main` requiring the `Tests (Node 20)` and `Tests (Node 22)`
 status checks to pass.
 

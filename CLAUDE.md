@@ -9,7 +9,13 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
 - **Two Docker containers**: Elasticsearch 8.x + Node.js MCP server
 - **Elasticsearch security**: Auth enabled; the app connects as the `elastic` user with `ES_SECRET` (auto-generated in `.env`, backfilled on update via `scripts/lib/es-security.sh`). ES has no host port — it's reachable only inside the Docker network. Use `scripts/es-tunnel.sh` for on-demand direct access.
 - **Auth**: OAuth2 authorization code flow via Azure AD — users sign in through the web dashboard
-- **Route protection**: All web/API routes require an authenticated session; `/health` and MCP endpoint are public
+- **Route protection**: All web/API routes require an authenticated session; `/health` and MCP endpoint are public.
+  The boundary is middleware order in `src/app.js`: everything registered
+  before `requireAuth` is public, everything after it is not, so moving a route
+  across that line changes who can reach it. `test/routes.test.js` pins the
+  current split down by request. `src/app.js` builds the app with no process
+  side effects (no listener, migrations or scheduler) and `src/index.js` owns
+  startup, which is what lets the tests import it.
 - **Health**: `/health` reports `ok`, `degraded` or `unhealthy`. Degraded means
   the index is refusing writes, or a node has crossed a disk watermark — a full
   disk trips Elasticsearch's flood-stage watermark and applies
@@ -62,6 +68,7 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
 ## Key Directories
 
 - `src/` — Application source (ES modules, Node.js 20)
+- `src/app.js` — Express app assembly; `src/index.js` — process startup
 - `src/auth/` — OAuth routes (`/auth/login`, `/auth/callback`, `/auth/logout`) and requireAuth middleware
 - `src/graph/` — Microsoft Graph API auth (MSAL ConfidentialClientApplication) and data fetching
 - `src/sync/` — Sync scheduler and engine
@@ -71,6 +78,23 @@ them in Elasticsearch, and exposes tools for Claude to search meeting history.
 - `scripts/migrate-session-ids.sh` — Runs the session-key migration by hand
   (it also runs automatically at startup). Dry run by default; `--apply` to
   write. Idempotent, and safe to re-run.
+
+## Testing
+
+- `npm test` is offline: no Docker, no credentials, no network.
+- `test/integration/` talks to a real Elasticsearch and **skips itself** when
+  none is configured. It exists because the query layer cannot be verified any
+  other way: Elasticsearch answers a query against a nested field with zero hits
+  rather than an error, so `action_items` and `meeting_notes` queries fail
+  silently. Both `search_meetings` and `get_action_items` shipped broken that
+  way. Any new query touching those two fields needs a test here.
+- `npm run test:integration` (`scripts/test-integration.sh`) starts a throwaway
+  Elasticsearch, runs the suite and removes the container, failure or Ctrl-C
+  included. Set `ELASTICSEARCH_URL` to use an existing node instead and it
+  manages no container — that is how CI runs it.
+- Each run uses its own `meetings-itest-*` index and deletes it afterwards.
+- `describe(name, { skip: null }, fn)` cancels every nested suite on Node 22.
+  Pass `false`, not `null`.
 
 ## Known Limits
 

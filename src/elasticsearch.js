@@ -8,6 +8,8 @@ const client = new Client(
     url: config.elasticsearch.url,
     username: config.elasticsearch.username,
     password: config.elasticsearch.password,
+    maxRetries: config.elasticsearch.maxRetries,
+    requestTimeout: config.elasticsearch.requestTimeout,
   })
 );
 const INDEX = config.elasticsearch.index;
@@ -255,17 +257,74 @@ export async function saveMigrationAttempts(attempts) {
   await updateSyncMetadata({ migration_attempts: attempts });
 }
 
+/**
+ * Flatten highlight fragments from nested inner_hits into the flat
+ * `highlights` shape callers already expect from top-level fields.
+ */
+function nestedHighlights(hit) {
+  const merged = {};
+  for (const innerHit of Object.values(hit.inner_hits || {})) {
+    for (const nested of innerHit.hits?.hits || []) {
+      for (const [field, fragments] of Object.entries(nested.highlight || {})) {
+        (merged[field] ||= []).push(...fragments);
+      }
+    }
+  }
+  return merged;
+}
+
 export async function searchMeetings({ query, attendee, dateFrom, dateTo, limit = 10 }) {
   const must = [];
   const filter = [];
 
   if (query) {
+    // action_items and meeting_notes are `nested`, which means their contents
+    // live in separate Lucene documents. A multi_match naming `action_items.text`
+    // silently matches nothing — it has to be reached through a nested query, or
+    // the text of every action item and meeting note is unsearchable.
     must.push({
-      multi_match: {
-        query,
-        fields: ['summary^3', 'title.text^2', 'transcript_text', 'decisions', 'action_items.text', 'meeting_notes.text'],
-        type: 'best_fields',
-        fuzziness: 'AUTO',
+      bool: {
+        minimum_should_match: 1,
+        should: [
+          {
+            multi_match: {
+              query,
+              fields: ['summary^3', 'title.text^2', 'transcript_text', 'decisions'],
+              type: 'best_fields',
+              fuzziness: 'AUTO',
+            },
+          },
+          {
+            nested: {
+              path: 'action_items',
+              score_mode: 'max',
+              query: {
+                multi_match: {
+                  query,
+                  fields: ['action_items.text', 'action_items.title'],
+                  type: 'best_fields',
+                  fuzziness: 'AUTO',
+                },
+              },
+              inner_hits: { _source: false, highlight: { fields: { 'action_items.text': { fragment_size: 200 } } } },
+            },
+          },
+          {
+            nested: {
+              path: 'meeting_notes',
+              score_mode: 'max',
+              query: {
+                multi_match: {
+                  query,
+                  fields: ['meeting_notes.text', 'meeting_notes.title', 'meeting_notes.subpoints'],
+                  type: 'best_fields',
+                  fuzziness: 'AUTO',
+                },
+              },
+              inner_hits: { _source: false, highlight: { fields: { 'meeting_notes.text': { fragment_size: 200 } } } },
+            },
+          },
+        ],
       },
     });
   }
@@ -298,11 +357,12 @@ export async function searchMeetings({ query, attendee, dateFrom, dateTo, limit 
         must_not: [{ term: { doc_type: 'sync_metadata' } }],
       },
     },
+    // Nested fields cannot be highlighted from the top level; their fragments
+    // come back on the inner_hits declared above and are merged in below.
     highlight: {
       fields: {
         summary: { fragment_size: 200 },
         transcript_text: { fragment_size: 200 },
-        'action_items.text': { fragment_size: 200 },
         decisions: { fragment_size: 200 },
       },
     },
@@ -315,7 +375,7 @@ export async function searchMeetings({ query, attendee, dateFrom, dateTo, limit 
     ...hit._source,
     transcript_text: undefined, // omit full transcript from search results
     raw_graph_response: undefined,
-    highlights: hit.highlight || {},
+    highlights: { ...(hit.highlight || {}), ...nestedHighlights(hit) },
   }));
 }
 
@@ -395,7 +455,10 @@ export async function getActionItems({ owner, dateFrom, dateTo, limit = 20 }) {
     sort: [{ start_time: 'desc' }],
     query: {
       bool: {
-        must: [{ exists: { field: 'action_items' } }],
+        // `exists` never matches a nested field: the parent document does not
+        // carry it, so this returned no meetings at all and the tool answered
+        // an empty list on every call.
+        must: [{ nested: { path: 'action_items', query: { match_all: {} }, score_mode: 'none' } }],
         filter,
         must_not: [{ term: { doc_type: 'sync_metadata' } }],
       },
