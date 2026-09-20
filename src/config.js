@@ -74,6 +74,10 @@ const config = {
   sync: {
     cron: optional('SYNC_CRON', '0 * * * *'),
     lookbackDays: optionalInt('SYNC_LOOKBACK_DAYS', 30),
+    // How long an isolated occurrence (not a systemic outage — see
+    // classifyUncaptured in sync/syncWindow.js) is retried before it's
+    // treated as permanently unresolvable and stops holding the watermark.
+    giveUpDays: optionalInt('SYNC_GIVE_UP_DAYS', 3),
   },
 };
 

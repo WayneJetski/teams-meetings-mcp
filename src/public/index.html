@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Teams Meeting Insights</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>
     :root {
       --bg: #0f1117;
@@ -95,6 +96,21 @@
     }
 
     button.secondary:hover { background: var(--border); }
+
+    a.btn-secondary {
+      display: inline-block;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    a.btn-secondary:hover { background: var(--border); }
 
     .container {
       max-width: 1200px;
@@ -200,6 +216,8 @@
     }
 
     .meeting-card:hover { border-color: var(--accent); }
+    .meeting-card.static { cursor: default; }
+    .meeting-card.static:hover { border-color: var(--border); }
 
     .meeting-card .meeting-header {
       display: flex;
@@ -247,6 +265,7 @@
     .badge.transcript { background: rgba(52,211,153,0.15); color: var(--green); }
     .badge.both { background: rgba(251,191,36,0.15); color: var(--yellow); }
     .badge.manual { background: rgba(139,143,163,0.15); color: var(--text2); }
+    .badge.imported { background: rgba(248,113,113,0.15); color: var(--red); }
 
     .badge.topic {
       background: var(--surface2);
@@ -442,6 +461,8 @@
       </span>
       <span class="status-label" id="user-info" style="margin-left:8px;"></span>
       <button id="sync-btn" onclick="triggerSync()">Sync Now</button>
+      <button class="secondary" onclick="document.getElementById('import-file-input').click()">Import</button>
+      <input type="file" id="import-file-input" accept="application/json" style="display:none;" onchange="importMeetingFile(this.files[0])" />
       <form method="POST" action="/auth/logout" style="margin:0;">
         <button type="submit" class="secondary" style="font-size:12px;">Sign out</button>
       </form>
@@ -494,6 +515,11 @@
           <div class="loading"><span class="spinner"></span></div>
         </div>
         <button id="manual-sync-btn" onclick="triggerSync()">Trigger Manual Sync</button>
+        <button class="secondary" onclick="resetWatermark()">Clear Watermark</button>
+      </div>
+      <div class="sync-panel" id="sync-failures-panel" style="display:none;">
+        <h3>Meetings That Didn't Sync This Run</h3>
+        <div class="meeting-list" id="sync-failures"></div>
       </div>
     </div>
   </div>
@@ -599,6 +625,7 @@
       const actionCount = m.action_items ? m.action_items.length : 0;
       const duration = m.duration_minutes ? `${m.duration_minutes} min` : '';
       const topics = (m.topics || []).slice(0, 3).map(t => `<span class="badge topic">${esc(t)}</span>`).join('');
+      const importedBadge = m.graph_accessible === false ? ' <span class="badge imported">imported</span>' : '';
 
       return `<div class="meeting-card" onclick="openMeeting('${esc(m.meeting_id)}')">
         <div class="meeting-header">
@@ -607,7 +634,7 @@
         </div>
         <div class="meta">
           ${duration ? duration + ' &middot; ' : ''}${attendeeCount} attendees${actionCount ? ' &middot; ' + actionCount + ' action items' : ''}
-          &middot; <span class="badge ${badgeClass}">${source}</span>
+          &middot; <span class="badge ${badgeClass}">${source}</span>${importedBadge}
         </div>
         ${m.summary ? `<div class="summary">${esc(m.summary)}</div>` : ''}
         ${topics ? `<div>${topics}</div>` : ''}
@@ -662,9 +689,13 @@
         const date = m.start_time ? new Date(m.start_time).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
         const attendees = (m.attendees || []).join(', ') || 'Unknown';
 
-        let html = `<h2>${esc(m.title)}</h2>
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        let html = `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+            <h2>${esc(m.title)}</h2>
+            <a class="btn-secondary" href="/api/meetings/${encodeURIComponent(id)}/export?tz=${encodeURIComponent(tz)}" download>Export</a>
+          </div>
           <div class="modal-meta">${date}${m.duration_minutes ? ' &middot; ' + m.duration_minutes + ' min' : ''} &middot; Organized by ${esc(m.organizer || 'Unknown')}</div>
-          <div class="modal-meta">Attendees: ${esc(attendees)}</div>`;
+          <div class="modal-meta">Attendees: ${esc(attendees)}${m.graph_accessible === false ? ' &middot; <span class="badge imported">imported</span>' : ''}</div>`;
 
         if (m.summary) {
           html += `<section><h3>Summary</h3><p>${esc(m.summary)}</p></section>`;
@@ -702,6 +733,36 @@
         content.innerHTML = html;
       } catch (err) {
         content.innerHTML = `<p>Failed to load meeting: ${err.message}</p>`;
+      }
+    }
+
+    // Import
+    async function importMeetingFile(file) {
+      const input = document.getElementById('import-file-input');
+      if (!file) return;
+
+      try {
+        const envelope = JSON.parse(await file.text());
+        const res = await fetch('/api/meetings/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(envelope),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          alert(`Import failed: ${data.error || res.statusText}`);
+          return;
+        }
+
+        const imported = data.results.filter(r => r.status === 'imported').length;
+        const failed = data.results.filter(r => r.error).length;
+        alert(`Imported ${imported} meeting(s)${failed ? `, ${failed} failed` : ''}.`);
+        loadMeetings();
+      } catch (err) {
+        alert(`Import failed: ${err.message}`);
+      } finally {
+        input.value = '';
       }
     }
 
@@ -775,10 +836,26 @@
       try {
         const res = await fetch('/sync/status');
         const s = await res.json();
+        const run = s.lastRun || {};
+
+        let runVal;
+        if (!run.ranAt) {
+          runVal = 'Never';
+        } else if (run.blocked) {
+          runVal = `${new Date(run.ranAt).toLocaleString()} &middot; aborted (writes blocked)`;
+        } else if (run.failed) {
+          runVal = `${new Date(run.ranAt).toLocaleString()} &middot; failed`;
+        } else {
+          runVal = `${new Date(run.ranAt).toLocaleString()} &middot; ${run.synced} new`;
+        }
 
         el.innerHTML = `
           <div class="item">
-            <div class="label">Last Sync</div>
+            <div class="label">Last Run</div>
+            <div class="val">${runVal}</div>
+          </div>
+          <div class="item">
+            <div class="label">Sync Watermark</div>
             <div class="val">${s.lastSync ? new Date(s.lastSync).toLocaleString() : 'Never'}</div>
           </div>
           <div class="item">
@@ -792,9 +869,63 @@
           <div class="item">
             <div class="label">Last Error</div>
             <div class="val" style="color:${s.lastSyncError ? 'var(--red)' : 'var(--green)'}">${s.lastSyncError || 'None'}</div>
-          </div>`;
+          </div>
+          ${run.isOutage ? `
+          <div class="item" style="grid-column:1/-1;">
+            <div class="label">Why the watermark isn't advancing</div>
+            <div class="val" style="color:var(--red);">
+              Every occurrence in the last run (${run.uncaptured}) came back with no data — treated as an outage
+              (Graph/auth issue, not dead meetings), so nothing was given up on. Watermark held at
+              ${run.oldestUncapturedStart ? new Date(run.oldestUncapturedStart).toLocaleDateString() : 'unknown'}.
+              If this is actually resolved, use Clear Watermark below.
+            </div>
+          </div>` : (run.uncaptured || run.abandoned) ? `
+          <div class="item" style="grid-column:1/-1;">
+            <div class="label">Why the watermark isn't advancing</div>
+            <div class="val" style="color:var(--yellow);">
+              ${run.uncaptured} occurrence(s) had no data on the last run (${run.errors || 0} errored)${run.abandoned ? `, ${run.abandoned} given up on after ${s.giveUpDays} day(s) and won't be retried again` : ''}.
+              ${run.oldestUncapturedStart ? `Still retrying back to ${new Date(run.oldestUncapturedStart).toLocaleDateString()}.` : ''}
+            </div>
+          </div>` : ''}`;
+
+        const failuresPanel = document.getElementById('sync-failures-panel');
+        const failuresEl = document.getElementById('sync-failures');
+        if (run.failures?.length) {
+          failuresPanel.style.display = '';
+          failuresEl.innerHTML = run.failures.map(syncFailureItem).join('');
+        } else {
+          failuresPanel.style.display = 'none';
+        }
       } catch (err) {
         el.innerHTML = `<div class="empty-state">Failed to load sync status</div>`;
+      }
+    }
+
+    function syncFailureItem(f) {
+      const date = f.eventStart
+        ? new Date(f.eventStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+        : 'Unknown date';
+      const statusBadge = f.retrying
+        ? `<span class="badge manual">retrying</span>`
+        : `<span class="badge imported">given up</span>`;
+
+      return `<div class="meeting-card static">
+        <div class="meeting-header">
+          <span class="title">${esc(f.title || 'Untitled')}</span>
+          <span class="date">${date}</span>
+        </div>
+        <div class="meta">${esc(f.reason || 'Unknown reason')} &middot; ${statusBadge}</div>
+      </div>`;
+    }
+
+    async function resetWatermark() {
+      if (!confirm('Clear the sync watermark? This drops any backlog it was holding and starts the next sync fresh from now — occurrences it was still retrying will not be revisited.')) return;
+      try {
+        const res = await fetch('/sync/reset-watermark', { method: 'POST' });
+        if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+        loadSyncStatus();
+      } catch (err) {
+        alert(`Failed to clear watermark: ${err.message}`);
       }
     }
 

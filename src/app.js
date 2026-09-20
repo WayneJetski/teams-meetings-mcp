@@ -63,6 +63,9 @@ export function createApp() {
     }
   });
 
+  // Favicon — public so it renders on the pre-login page too
+  app.get('/favicon.svg', (req, res) => res.sendFile(join(__dirname, 'public', 'favicon.svg')));
+
   // Auth routes (login, callback, logout, me)
   app.use(authRouter);
 
